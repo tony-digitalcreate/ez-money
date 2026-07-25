@@ -57,6 +57,7 @@ function computeBalances() {
   for (const t of DB.transactions) {
     if (t.type === 'expense' && t.wallet in bal) bal[t.wallet] -= t.amount;
     else if ((t.type === 'income' || t.type === 'topup') && t.wallet in bal) bal[t.wallet] += t.amount;
+    else if (t.type === 'adjust' && t.wallet in bal) bal[t.wallet] += t.delta;
     else if (t.type === 'transfer') {
       if (t.fromWallet in bal) bal[t.fromWallet] -= t.amount;
       if (t.toWallet in bal) bal[t.toWallet] += (t.toAmount != null ? t.toAmount : t.amount);
@@ -173,6 +174,7 @@ function renderAll() {
   renderQuickAdd();
   renderDashboard();
   renderLedger();
+  renderReport();
   renderBudgets();
   renderSettings();
 }
@@ -237,6 +239,7 @@ function renderDashboard() {
   $('statDaily').textContent = fmt(days ? expense / days : 0, dashCurrency);
 
   renderDonut(txs);
+  renderWeekday(txs);
   renderTrend();
   renderRows($('recentList'), [...DB.transactions].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)).slice(0, 8));
 }
@@ -261,24 +264,61 @@ function renderWalletOverview() {
         <span class="wbr-name" title="${esc(w.name)}">${esc(w.name)}</span>
         <div class="wbr-track"><div class="wbr-fill" style="width:${pct}%;background:${w.color}"></div></div>
         <span class="wbr-val ${b < 0 ? 'neg' : ''}">${fmt(b, cur)}</span>
+        <button class="wbr-fix" data-id="${w.id}" title="Reconcile — fix to actual balance">⚖</button>
       </div>`;
     }
     group.innerHTML = `<div class="wg-head"><span>${esc(cur)}</span><span class="wg-sub">${fmt(sub, cur)}</span></div>${rows}`;
     box.appendChild(group);
   }
+  box.querySelectorAll('.wbr-fix').forEach(btn => btn.addEventListener('click', () => openReconcile(btn.dataset.id)));
   $('woGrandTotals').innerHTML = presentCurrencies().map(c => `<span>${fmt(totals[c], c)}</span>`).join('');
 }
 
 function renderCurScope() {
-  const box = $('curScope');
-  box.innerHTML = '';
-  for (const cur of presentCurrencies()) {
-    const b = document.createElement('button');
-    b.textContent = `${sym(cur)} ${cur}`;
-    b.classList.toggle('active', cur === dashCurrency);
-    b.addEventListener('click', () => { dashCurrency = cur; renderDashboard(); });
-    box.appendChild(b);
+  for (const boxId of ['curScope', 'repCurScope']) {
+    const box = $(boxId);
+    box.innerHTML = '';
+    for (const cur of presentCurrencies()) {
+      const b = document.createElement('button');
+      b.textContent = `${sym(cur)} ${cur}`;
+      b.classList.toggle('active', cur === dashCurrency);
+      b.addEventListener('click', () => { dashCurrency = cur; renderDashboard(); renderReport(); });
+      box.appendChild(b);
+    }
   }
+}
+
+// Mon–Sun spending bars for the selected month (same currency scope as the donut)
+function renderWeekday(txs) {
+  const svg = $('weekday');
+  const days = [0, 0, 0, 0, 0, 0, 0]; // Mon..Sun
+  for (const t of txs) if (t.type === 'expense')
+    days[(new Date(t.date + 'T00:00:00').getDay() + 6) % 7] += t.amount;
+  const max = Math.max(...days);
+  const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const W = 380, H = 220, padB = 28, padT = 26, chartH = H - padB - padT;
+  let out = '';
+  for (let i = 1; i <= 4; i++) {
+    const yy = padT + chartH * i / 4;
+    out += `<line x1="0" y1="${yy}" x2="${W}" y2="${yy}" stroke="#eef2f7" stroke-width="1"/>`;
+  }
+  if (!max) {
+    out += `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#93a1b0" font-size="13" font-style="italic">no expenses</text>`;
+  } else {
+    const groupW = W / 7, barW = 30;
+    days.forEach((v, i) => {
+      const cx = groupW * i + groupW / 2;
+      const h = v / max * chartH;
+      const top = v === max;
+      out += `<rect x="${cx - barW / 2}" y="${padT + chartH - h}" width="${barW}" height="${Math.max(h, v ? 2 : 0)}" rx="6" fill="#d9534a" opacity="${top ? '1' : '.55'}"><title>${labels[i]}: ${fmt(v, dashCurrency)}</title></rect>`;
+      if (v) {
+        const compact = v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? Math.round(v / 1e3) + 'k' : String(Math.round(v));
+        out += `<text x="${cx}" y="${padT + chartH - h - 6}" text-anchor="middle" font-size="10" font-weight="${top ? 800 : 600}" fill="${top ? '#24303c' : '#93a1b0'}">${compact}</text>`;
+      }
+      out += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="12" font-weight="${top ? 800 : 400}" fill="${top ? '#24303c' : '#93a1b0'}">${labels[i]}</text>`;
+    });
+  }
+  svg.innerHTML = out;
 }
 
 function renderDonut(txs) {
@@ -430,6 +470,10 @@ function renderRows(container, txs) {
       catLabel = '↑ Top-up'; catCls = 'topup'; dotColor = 'transparent';
       walletChip = esc(walletName(t.wallet));
       amountHtml = `<span class="lr-amount topup">+${fmt(t.amount, walletCur(t.wallet))}</span>`;
+    } else if (t.type === 'adjust') {
+      catLabel = '⚖ Adjust'; catCls = 'adjust'; dotColor = 'transparent';
+      walletChip = esc(walletName(t.wallet));
+      amountHtml = `<span class="lr-amount adjust">${t.delta >= 0 ? '+' : '−'}${fmt(Math.abs(t.delta), walletCur(t.wallet))}</span>`;
     } else {
       catLabel = esc(t.category); dotColor = catColor(t.type, t.category);
       walletChip = esc(walletName(t.wallet));
@@ -444,6 +488,128 @@ function renderRows(container, txs) {
     row.addEventListener('click', () => openEdit(t));
     container.appendChild(row);
   }
+}
+
+// ----- report (yearly) -----
+let reportYear = new Date().getFullYear();
+
+function renderReport() {
+  if (!DB.settings) return;
+  $('repYearLabel').textContent = reportYear;
+  const inCur = t => walletCur(t.wallet) === dashCurrency;
+  const year = String(reportYear);
+  const txs = DB.transactions.filter(t => t.date.startsWith(year) && (t.type === 'income' || t.type === 'expense') && inCur(t));
+
+  const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+  const data = months.map(mo => {
+    const mt = txs.filter(t => t.date.startsWith(mo));
+    return {
+      m: mo,
+      inc: mt.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0),
+      exp: mt.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+    };
+  });
+
+  const totInc = data.reduce((s, d) => s + d.inc, 0);
+  const totExp = data.reduce((s, d) => s + d.exp, 0);
+  $('repIncome').textContent = fmt(totInc, dashCurrency);
+  $('repExpense').textContent = fmt(totExp, dashCurrency);
+  $('repNet').textContent = fmt(totInc - totExp, dashCurrency);
+  $('repRate').textContent = totInc > 0 ? Math.round((totInc - totExp) / totInc * 100) + '%' : '—';
+
+  // 12-month chart
+  const svg = $('repChart');
+  const max = Math.max(1, ...data.flatMap(d => [d.inc, d.exp]));
+  const W = 720, H = 240, padB = 28, padT = 12, chartH = H - padB - padT;
+  const groupW = W / 12, barW = 18;
+  let out = '';
+  for (let i = 1; i <= 4; i++) {
+    const yy = padT + chartH * i / 4;
+    out += `<line x1="0" y1="${yy}" x2="${W}" y2="${yy}" stroke="#eef2f7" stroke-width="1"/>`;
+  }
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  data.forEach((d, i) => {
+    const cx = groupW * i + groupW / 2;
+    const hInc = d.inc / max * chartH, hExp = d.exp / max * chartH;
+    out += `<rect x="${cx - barW - 2}" y="${padT + chartH - hInc}" width="${barW}" height="${Math.max(hInc, d.inc ? 2 : 0)}" rx="4" fill="#2e9e5b" opacity=".85"/>`;
+    out += `<rect x="${cx + 2}" y="${padT + chartH - hExp}" width="${barW}" height="${Math.max(hExp, d.exp ? 2 : 0)}" rx="4" fill="#d9534a" opacity=".85"/>`;
+    const lbl = new Date(d.m + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short' });
+    const bold = d.m === nowMonth ? 'font-weight="800" fill="#24303c"' : 'fill="#93a1b0"';
+    out += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="11" ${bold}>${lbl}</text>`;
+  });
+  svg.innerHTML = out;
+
+  // top categories of the year
+  const byCat = {};
+  for (const t of txs) if (t.type === 'expense') byCat[t.category] = (byCat[t.category] || 0) + t.amount;
+  const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const box = $('repTopCats');
+  box.innerHTML = cats.length ? '' : '<div class="empty">No expenses this year yet ✎</div>';
+  const catMax = cats.length ? cats[0][1] : 1;
+  for (const [name, amt] of cats) {
+    const row = document.createElement('div');
+    row.className = 'rep-cat-row';
+    row.innerHTML = `
+      <span class="rep-cat-name"><i class="dot" style="background:${catColor('expense', name)}"></i>${esc(name)}</span>
+      <div class="wbr-track"><div class="wbr-fill" style="width:${Math.max(2, amt / catMax * 100)}%;background:${catColor('expense', name)}"></div></div>
+      <span class="rep-cat-amt">${fmt(amt, dashCurrency)}<em>${totExp ? Math.round(amt / totExp * 100) + '%' : ''}</em></span>`;
+    box.appendChild(row);
+  }
+
+  // monthly breakdown table + best/worst
+  const active = data.filter(d => d.inc || d.exp);
+  let best = null, worst = null;
+  for (const d of active) {
+    const net = d.inc - d.exp;
+    if (!best || net > best.net) best = { m: d.m, net };
+    if (!worst || net < worst.net) worst = { m: d.m, net };
+  }
+  const mName = m => new Date(m + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short' });
+  $('repBestWorst').textContent = best ? `best: ${mName(best.m)} · toughest: ${mName(worst.m)}` : '';
+  let rows = `<tr><th>Month</th><th>Income</th><th>Spent</th><th>Net</th></tr>`;
+  for (const d of data) {
+    const net = d.inc - d.exp;
+    const cur = d.m === nowMonth ? ' class="rep-now"' : '';
+    const dim = (!d.inc && !d.exp) ? ' rep-dim' : '';
+    rows += `<tr${cur ? cur : dim ? ` class="${dim.trim()}"` : ''}>
+      <td>${mName(d.m)}</td>
+      <td class="num inc">${d.inc ? fmt(d.inc, dashCurrency) : '·'}</td>
+      <td class="num exp">${d.exp ? fmt(d.exp, dashCurrency) : '·'}</td>
+      <td class="num ${net < 0 ? 'exp' : 'inc'}">${(d.inc || d.exp) ? fmt(net, dashCurrency) : '·'}</td>
+    </tr>`;
+  }
+  rows += `<tr class="rep-total"><td>Total</td><td class="num inc">${fmt(totInc, dashCurrency)}</td><td class="num exp">${fmt(totExp, dashCurrency)}</td><td class="num ${totInc - totExp < 0 ? 'exp' : 'inc'}">${fmt(totInc - totExp, dashCurrency)}</td></tr>`;
+  $('repTable').innerHTML = rows;
+}
+
+// ----- reconcile (fix wallet to actual) -----
+let recWalletId = null;
+function openReconcile(id) {
+  const w = walletOf(id);
+  if (!w) return;
+  recWalletId = id;
+  const bal = computeBalances()[id] || 0;
+  $('recInfo').innerHTML = `<b>${esc(w.name)}</b> — the app shows <b>${fmt(bal, w.currency)}</b>. Type what the bank/app really says and I'll post one adjustment for the difference.`;
+  $('recActual').value = '';
+  $('recNote').value = '';
+  $('recModal').classList.remove('hidden');
+  $('recActual').focus();
+}
+function closeReconcile() { $('recModal').classList.add('hidden'); recWalletId = null; }
+async function saveReconcile() {
+  const w = walletOf(recWalletId);
+  if (!w) return closeReconcile();
+  const actual = Number($('recActual').value);
+  if ($('recActual').value === '' || !isFinite(actual)) return toast('Enter the actual balance');
+  const current = computeBalances()[recWalletId] || 0;
+  const delta = actual - current;
+  if (delta === 0) { closeReconcile(); return toast('Already matches — nothing to fix ✓'); }
+  try {
+    await Store.addTx({ type: 'adjust', wallet: recWalletId, delta, date: today(), note: $('recNote').value || 'reconcile' });
+  } catch (e) { return toast('Error: ' + e); }
+  closeReconcile();
+  await reload();
+  toast(`Adjusted ${delta > 0 ? '+' : '−'}${fmt(Math.abs(delta), w.currency)} ⚖`);
 }
 
 // ----- budgets -----
@@ -609,18 +775,19 @@ function openEdit(t) {
   editingId = t.id;
   editMode = t.type;
   const isEI = t.type === 'expense' || t.type === 'income';
-  $('editTitle').textContent = { expense: 'Edit expense', income: 'Edit income', transfer: 'Edit transfer', topup: 'Edit top-up' }[t.type];
+  $('editTitle').textContent = { expense: 'Edit expense', income: 'Edit income', transfer: 'Edit transfer', topup: 'Edit top-up', adjust: 'Edit adjustment' }[t.type];
   $('editTypeToggle').classList.toggle('hidden', !isEI);
   $('editCategoryRow').classList.toggle('hidden', !isEI);
-  $('editWalletRow').classList.toggle('hidden', !(isEI || t.type === 'topup'));
+  $('editWalletRow').classList.toggle('hidden', !(isEI || t.type === 'topup' || t.type === 'adjust'));
   $('editFromRow').classList.toggle('hidden', t.type !== 'transfer');
   $('editToRow').classList.toggle('hidden', t.type !== 'transfer');
+  $('editAmount').min = t.type === 'adjust' ? '' : '0'; // adjustments can be negative
 
   if (isEI) {
     document.querySelectorAll('#editTypeToggle .tt-btn').forEach(b => b.classList.toggle('active', b.dataset.type === editMode));
     fillCategorySelect($('editCategory'), editMode, t.category);
     fillWalletSelect($('editWallet'), t.wallet);
-  } else if (t.type === 'topup') {
+  } else if (t.type === 'topup' || t.type === 'adjust') {
     fillWalletSelect($('editWallet'), t.wallet);
   } else {
     fillWalletSelect($('editFrom'), t.fromWallet);
@@ -628,7 +795,7 @@ function openEdit(t) {
     $('editToAmount').value = t.toAmount != null ? t.toAmount : t.amount;
   }
   updateEditReceived();
-  $('editAmount').value = t.amount;
+  $('editAmount').value = t.type === 'adjust' ? t.delta : t.amount;
   $('editDate').value = t.date;
   $('editNote').value = t.note || '';
   $('modal').classList.remove('hidden');
@@ -641,6 +808,14 @@ function closeEdit() { $('modal').classList.add('hidden'); editingId = null; }
 
 async function saveEdit() {
   const amount = Number($('editAmount').value);
+  if (editMode === 'adjust') {
+    if (!isFinite(amount) || amount === 0) return toast('Enter a non-zero adjustment');
+    const body = { type: 'adjust', delta: amount, wallet: $('editWallet').value, date: $('editDate').value, note: $('editNote').value };
+    try { await Store.updateTx(editingId, body); } catch (e) { return toast('Error: ' + e); }
+    closeEdit();
+    await reload();
+    return toast('Saved ✓');
+  }
   if (!(amount > 0)) return toast('Enter an amount');
   const body = { type: editMode, amount, date: $('editDate').value, note: $('editNote').value };
   if (editMode === 'transfer') {
@@ -717,6 +892,12 @@ $('qaNote').addEventListener('keydown', e => { if (e.key === 'Enter') quickAdd()
 $('prevMonth').addEventListener('click', () => shiftMonth(-1));
 $('nextMonth').addEventListener('click', () => shiftMonth(1));
 $('taRefresh').addEventListener('click', () => loadRates(true));
+$('repPrevYear').addEventListener('click', () => { reportYear--; renderReport(); });
+$('repNextYear').addEventListener('click', () => { reportYear++; renderReport(); });
+$('recSave').addEventListener('click', saveReconcile);
+$('recCancel').addEventListener('click', closeReconcile);
+$('recActual').addEventListener('keydown', e => { if (e.key === 'Enter') saveReconcile(); });
+$('recModal').addEventListener('click', e => { if (e.target === $('recModal')) closeReconcile(); });
 
 ['fltSearch', 'fltType', 'fltWallet', 'fltCategory'].forEach(id => $(id).addEventListener('input', renderLedger));
 $('btnExport').addEventListener('click', exportCSV);
@@ -743,6 +924,7 @@ function exportCSV() {
     let wallet, category, amount;
     if (t.type === 'transfer') { wallet = `${walletName(t.fromWallet)} -> ${walletName(t.toWallet)}`; category = 'Transfer'; amount = t.amount; }
     else if (t.type === 'topup') { wallet = walletName(t.wallet); category = 'Top-up'; amount = t.amount; }
+    else if (t.type === 'adjust') { wallet = walletName(t.wallet); category = 'Adjustment'; amount = t.delta; }
     else { wallet = walletName(t.wallet); category = t.category; amount = t.amount; }
     rows.push([t.date, t.type, esc(wallet), esc(category), amount, esc(t.note || '')].join(','));
   }

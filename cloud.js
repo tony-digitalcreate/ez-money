@@ -28,6 +28,13 @@ function normalizeTx(body) {
   const type = body.type;
   if (!body.date || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) throw 'bad date';
   const note = String(body.note || '').slice(0, 300);
+  if (type === 'adjust') {
+    const w = find(body.wallet);
+    if (!w) throw 'unknown wallet';
+    const delta = Number(body.delta);
+    if (!isFinite(delta) || delta === 0) throw 'bad delta';
+    return { type, delta, wallet: w.id, date: body.date, note };
+  }
   const amount = Number(body.amount);
   if (!isFinite(amount) || amount <= 0) throw 'bad amount';
   if (type === 'transfer') {

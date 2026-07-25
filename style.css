@@ -176,7 +176,13 @@ input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: v
   color: var(--ink-faint); border-bottom: 1px solid var(--rule); padding-bottom: .25rem; margin-bottom: .45rem;
 }
 .wg-sub { color: var(--ink-soft); }
-.wallet-bar-row { display: grid; grid-template-columns: 130px 1fr auto; align-items: center; gap: .7rem; padding: .2rem 0; font-size: .84rem; }
+.wallet-bar-row { display: grid; grid-template-columns: 130px 1fr auto auto; align-items: center; gap: .7rem; padding: .2rem 0; font-size: .84rem; }
+.wbr-fix {
+  border: none; background: none; cursor: pointer; font-size: .85rem;
+  color: var(--ink-faint); padding: .1rem .3rem; border-radius: 6px; opacity: .55;
+}
+.wallet-bar-row:hover .wbr-fix, .wbr-fix:focus { opacity: 1; }
+.wbr-fix:hover { background: var(--blue-soft); color: var(--blue); }
 .wbr-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--ink); }
 .wbr-track { height: 14px; background: #f0f4f8; border-radius: 7px; overflow: hidden; }
 .wbr-fill { height: 100%; border-radius: 7px; min-width: 2px; transition: width .35s; }
@@ -204,7 +210,8 @@ input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: v
 .stat-expense .stat-value { color: var(--red); }
 .stat-balance .stat-value { color: var(--blue); }
 
-.dash-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: .9rem; margin-bottom: .9rem; }
+.dash-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: .9rem; margin-bottom: .9rem; }
+.chart-wide { grid-column: 1 / -1; }
 .chart-card svg { width: 100%; height: auto; }
 .donut-wrap { display: flex; align-items: center; gap: 1.2rem; }
 #donut { flex: 0 0 200px; }
@@ -263,13 +270,38 @@ input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: v
 .lr-amount.inc { color: var(--green); }
 .lr-amount.topup { color: var(--blue); }
 .lr-amount.transfer { color: var(--ink-soft); }
-.lr-cat.transfer i, .lr-cat.topup i { display: none; }
+.lr-amount.adjust { color: #8a6fbf; }
+.lr-cat.transfer i, .lr-cat.topup i, .lr-cat.adjust i { display: none; }
 
 .page-total {
   display: flex; justify-content: space-between; padding: .8rem 1.4rem;
   font-weight: 800; border-top: 2px solid var(--ink);
   background: #fbfcfe;
 }
+
+/* ---------- report ---------- */
+.report-head-card { margin-bottom: .9rem; }
+.rep-head { display: flex; align-items: center; justify-content: space-between; }
+.rep-head h2 { margin-bottom: 0; }
+.rep-scope { margin: .5rem 0 0; }
+.rep-topcats { display: flex; flex-direction: column; gap: .55rem; padding: .2rem 0; }
+.rep-cat-row { display: grid; grid-template-columns: 190px 1fr auto; align-items: center; gap: .8rem; font-size: .86rem; }
+.rep-cat-name { display: inline-flex; align-items: center; gap: .5rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rep-cat-amt { font-weight: 700; white-space: nowrap; }
+.rep-cat-amt em { font-style: normal; color: var(--ink-faint); font-weight: 600; font-size: .78rem; margin-left: .4rem; }
+.rep-table-wrap { overflow-x: auto; padding: .4rem 1.4rem 1rem; }
+.rep-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.rep-table th { text-align: right; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); padding: .4rem .6rem; border-bottom: 2px solid var(--ink); }
+.rep-table th:first-child { text-align: left; }
+.rep-table td { padding: .42rem .6rem; border-bottom: 1px solid var(--rule); }
+.rep-table td.num { text-align: right; font-weight: 600; white-space: nowrap; }
+.rep-table td.num.inc { color: var(--green); }
+.rep-table td.num.exp { color: var(--red); }
+.rep-table tr.rep-dim td { color: var(--ink-faint); }
+.rep-table tr.rep-dim td.num { color: var(--ink-faint); font-weight: 400; }
+.rep-table tr.rep-now td { background: var(--blue-soft); }
+.rep-table tr.rep-now td:first-child { font-weight: 800; }
+.rep-table tr.rep-total td { border-top: 2px solid var(--ink); border-bottom: none; font-weight: 800; }
 
 /* ---------- budgets ---------- */
 .hint { color: var(--ink-faint); font-size: .85rem; margin-bottom: 1rem; }
@@ -405,6 +437,11 @@ input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: v
   .wallet-bars { grid-template-columns: 1fr; gap: 0; }
   .wallet-bar-row { grid-template-columns: 110px 1fr auto; font-size: .8rem; }
   .wo-grand { font-size: .8rem; gap: .5rem; }
+
+  .rep-cat-row { grid-template-columns: 110px 1fr auto; gap: .5rem; font-size: .8rem; }
+  .rep-cat-amt em { display: none; }
+  .rep-table-wrap { padding: .3rem .8rem .8rem; }
+  .wbr-fix { opacity: 1; } /* no hover on touch — keep visible */
 
   .filter-bar { flex-wrap: wrap; }
   .filter-bar #fltSearch { flex-basis: 100%; }

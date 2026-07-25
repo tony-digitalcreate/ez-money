@@ -31,6 +31,7 @@
   <nav class="tabs">
     <button class="tab active" data-view="dashboard">Dashboard</button>
     <button class="tab" data-view="ledger">Ledger</button>
+    <button class="tab" data-view="report">Report</button>
     <button class="tab" data-view="budgets">Budgets</button>
     <button class="tab" data-view="settings">Settings</button>
   </nav>
@@ -110,6 +111,10 @@
         </div>
       </div>
       <div class="card chart-card">
+        <h2>Daily spend (Mon–Sun)</h2>
+        <svg id="weekday" viewBox="0 0 380 220" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <div class="card chart-card chart-wide">
         <h2>Last 6 months</h2>
         <svg id="trend" viewBox="0 0 520 220" preserveAspectRatio="xMidYMid meet"></svg>
         <div class="trend-legend"><span><i class="dot dot-inc"></i>Income</span><span><i class="dot dot-exp"></i>Expense</span></div>
@@ -132,6 +137,7 @@
         <option value="income">Income</option>
         <option value="transfer">Transfers</option>
         <option value="topup">Top-ups</option>
+        <option value="adjust">Adjustments</option>
       </select>
       <select id="fltWallet"><option value="">All wallets</option></select>
       <select id="fltCategory"><option value="">All categories</option></select>
@@ -147,6 +153,48 @@
         <span>Page total</span>
         <span id="ledgerTotal">0</span>
       </div>
+    </div>
+  </section>
+
+  <!-- ================= REPORT ================= -->
+  <section id="view-report" class="view">
+    <div class="card report-head-card">
+      <div class="rep-head">
+        <h2>Yearly report</h2>
+        <div class="month-nav">
+          <button id="repPrevYear" class="icon-btn" title="Previous year">‹</button>
+          <span id="repYearLabel">—</span>
+          <button id="repNextYear" class="icon-btn" title="Next year">›</button>
+        </div>
+      </div>
+      <div class="scope-row rep-scope">
+        <span class="scope-label">Currency</span>
+        <div class="cur-scope" id="repCurScope"></div>
+      </div>
+    </div>
+
+    <div class="stat-row">
+      <div class="card stat stat-income"><span class="stat-label">Year income</span><span class="stat-value" id="repIncome">0</span></div>
+      <div class="card stat stat-expense"><span class="stat-label">Year spent</span><span class="stat-value" id="repExpense">0</span></div>
+      <div class="card stat stat-balance"><span class="stat-label">Net saved</span><span class="stat-value" id="repNet">0</span></div>
+      <div class="card stat stat-daily"><span class="stat-label">Savings rate</span><span class="stat-value" id="repRate">—</span></div>
+    </div>
+
+    <div class="dash-grid">
+      <div class="card chart-card chart-wide">
+        <h2>Month by month</h2>
+        <svg id="repChart" viewBox="0 0 720 240" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="trend-legend"><span><i class="dot dot-inc"></i>Income</span><span><i class="dot dot-exp"></i>Expense</span></div>
+      </div>
+      <div class="card chart-card chart-wide">
+        <h2>Top categories this year</h2>
+        <div id="repTopCats" class="rep-topcats"></div>
+      </div>
+    </div>
+
+    <div class="card notebook-page">
+      <div class="page-head"><span>Monthly breakdown</span><span id="repBestWorst" class="page-count"></span></div>
+      <div class="rep-table-wrap"><table class="rep-table" id="repTable"></table></div>
     </div>
   </section>
 
@@ -219,12 +267,28 @@
   </div>
 </div>
 
+<!-- reconcile modal -->
+<div id="recModal" class="modal hidden">
+  <div class="modal-card card">
+    <h2>⚖ Reconcile wallet</h2>
+    <p class="hint" id="recInfo"></p>
+    <label>Actual balance right now <input type="number" id="recActual" step="any" placeholder="what the bank really says"></label>
+    <label>Note <input type="text" id="recNote" placeholder="reconcile (optional)" maxlength="300"></label>
+    <div class="modal-actions">
+      <span class="spacer"></span>
+      <button id="recCancel" class="btn-ghost">Cancel</button>
+      <button id="recSave" class="btn-primary">Post adjustment</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 
 <!-- mobile bottom navigation -->
 <nav class="bottom-nav">
   <button class="bn-btn active" data-view="dashboard"><span class="bn-ico">🏠</span><span>Home</span></button>
   <button class="bn-btn" data-view="ledger"><span class="bn-ico">📒</span><span>Ledger</span></button>
+  <button class="bn-btn" data-view="report"><span class="bn-ico">📊</span><span>Report</span></button>
   <button class="bn-btn" data-view="budgets"><span class="bn-ico">🎯</span><span>Budgets</span></button>
   <button class="bn-btn" data-view="settings"><span class="bn-ico">⚙️</span><span>Settings</span></button>
 </nav>
