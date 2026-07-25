@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0">
+<title>EZ Money Manager</title>
+<meta name="description" content="Personal expense & income recorder with wallets, budgets and cloud sync.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2e9e5b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="EZ Money">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Caveat:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">₭</div>
+    <div>
+      <h1>EZ Money Manager</h1>
+      <span class="tagline">your money, on paper</span>
+    </div>
+  </div>
+  <nav class="tabs">
+    <button class="tab active" data-view="dashboard">Dashboard</button>
+    <button class="tab" data-view="ledger">Ledger</button>
+    <button class="tab" data-view="budgets">Budgets</button>
+    <button class="tab" data-view="settings">Settings</button>
+  </nav>
+  <button id="installBtn" class="btn-ghost install-btn hidden">⤓ Install</button>
+  <div class="month-nav">
+    <button id="prevMonth" class="icon-btn" title="Previous month">‹</button>
+    <span id="monthLabel">—</span>
+    <button id="nextMonth" class="icon-btn" title="Next month">›</button>
+  </div>
+</header>
+
+<!-- quick add — adapts to the chosen mode -->
+<section class="quick-add card">
+  <div class="type-toggle" id="typeToggle">
+    <button class="tt-btn tt-expense active" data-mode="expense">− Expense</button>
+    <button class="tt-btn tt-income" data-mode="income">+ Income</button>
+    <button class="tt-btn tt-transfer" data-mode="transfer">⇄ Transfer</button>
+    <button class="tt-btn tt-topup" data-mode="topup">↑ Top-up</button>
+  </div>
+  <input type="number" id="qaAmount" class="qa-amount" placeholder="0" min="0" step="any" inputmode="decimal">
+  <select id="qaCategory" class="qa-field"></select>
+  <select id="qaWallet" class="qa-field" title="Wallet"></select>
+  <select id="qaFrom" class="qa-field" title="From wallet"></select>
+  <span id="qaArrow" class="qa-arrow qa-field">→</span>
+  <select id="qaTo" class="qa-field" title="To wallet"></select>
+  <input type="number" id="qaToAmount" class="qa-field qa-amount qa-received" placeholder="received" min="0" step="any">
+  <input type="date" id="qaDate">
+  <input type="text" id="qaNote" class="qa-note" placeholder="note (optional)" maxlength="300">
+  <button id="qaSave" class="btn-primary">Record it ✎</button>
+</section>
+
+<main>
+  <!-- ================= DASHBOARD ================= -->
+  <section id="view-dashboard" class="view active">
+
+    <div class="card wallet-overview">
+      <div class="wo-head">
+        <h2>Wallet Overview</h2>
+        <span id="woGrandTotals" class="wo-grand"></span>
+      </div>
+      <div id="walletBars" class="wallet-bars"></div>
+    </div>
+
+    <div class="scope-row">
+      <span class="scope-label">Showing</span>
+      <div class="cur-scope" id="curScope"></div>
+      <span class="scope-note">monthly income &amp; spending for the selected currency</span>
+    </div>
+
+    <div class="stat-row">
+      <div class="card stat stat-income"><span class="stat-label">Income</span><span class="stat-value" id="statIncome">0</span></div>
+      <div class="card stat stat-expense"><span class="stat-label">Spent</span><span class="stat-value" id="statExpense">0</span></div>
+      <div class="card stat stat-balance"><span class="stat-label">Net this month</span><span class="stat-value" id="statBalance">0</span></div>
+      <div class="card stat stat-daily"><span class="stat-label">Avg spend / day</span><span class="stat-value" id="statDaily">0</span></div>
+    </div>
+
+    <div class="dash-grid">
+      <div class="card chart-card">
+        <h2>Where it went</h2>
+        <div class="donut-wrap">
+          <svg id="donut" viewBox="0 0 200 200" width="200" height="200"></svg>
+          <div id="donutLegend" class="donut-legend"></div>
+        </div>
+      </div>
+      <div class="card chart-card">
+        <h2>Last 6 months</h2>
+        <svg id="trend" viewBox="0 0 520 220" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="trend-legend"><span><i class="dot dot-inc"></i>Income</span><span><i class="dot dot-exp"></i>Expense</span></div>
+      </div>
+    </div>
+
+    <div class="card recent-card">
+      <h2>Recent entries</h2>
+      <div id="recentList" class="ledger-lines"></div>
+    </div>
+  </section>
+
+  <!-- ================= LEDGER ================= -->
+  <section id="view-ledger" class="view">
+    <div class="card filter-bar">
+      <input type="text" id="fltSearch" placeholder="🔍 search notes & categories…">
+      <select id="fltType">
+        <option value="">All types</option>
+        <option value="expense">Expenses</option>
+        <option value="income">Income</option>
+        <option value="transfer">Transfers</option>
+        <option value="topup">Top-ups</option>
+      </select>
+      <select id="fltWallet"><option value="">All wallets</option></select>
+      <select id="fltCategory"><option value="">All categories</option></select>
+      <button id="btnExport" class="btn-ghost">⬇ Export CSV</button>
+    </div>
+    <div class="card notebook-page">
+      <div class="page-head">
+        <span id="ledgerTitle">Ledger</span>
+        <span id="ledgerCount" class="page-count"></span>
+      </div>
+      <div id="ledgerList" class="ledger-lines margin-line"></div>
+      <div class="page-total">
+        <span>Page total</span>
+        <span id="ledgerTotal">0</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= BUDGETS ================= -->
+  <section id="view-budgets" class="view">
+    <div class="card">
+      <h2>Monthly budgets</h2>
+      <p class="hint">Set a monthly limit per expense category. Progress tracks the month shown in the top bar, counting spending from your <b id="budgetCurName">₭</b> wallets.</p>
+      <div id="budgetList" class="budget-list"></div>
+    </div>
+  </section>
+
+  <!-- ================= SETTINGS ================= -->
+  <section id="view-settings" class="view">
+    <div class="card cloud-card">
+      <div class="cloud-head">
+        <h2>Cloud Sync</h2>
+        <span id="cloudBadge" class="sync-badge local">● Local</span>
+      </div>
+      <p class="hint" id="cloudStatus">Checking sync status…</p>
+      <button id="cloudSignOut" class="btn-ghost hidden">Sign out</button>
+    </div>
+    <div class="card">
+      <h2>Wallets</h2>
+      <p class="hint">Rename a wallet, change its currency, or add a new one. Deleting a wallet keeps its past entries but they'll show as “Unknown”.</p>
+      <div id="walletList" class="wallet-settings-list"></div>
+      <div class="cat-add wallet-add">
+        <input type="text" id="newWalletName" placeholder="new wallet name…">
+        <select id="newWalletCur"></select>
+        <button class="btn-ghost" id="addWallet">+ Add wallet</button>
+      </div>
+    </div>
+    <div class="settings-grid">
+      <div class="card">
+        <h2>Expense categories</h2>
+        <div id="catExpense" class="cat-list"></div>
+        <div class="cat-add"><input type="text" id="newCatExpense" placeholder="new category…"><button class="btn-ghost" id="addCatExpense">+ Add</button></div>
+      </div>
+      <div class="card">
+        <h2>Income categories</h2>
+        <div id="catIncome" class="cat-list"></div>
+        <div class="cat-add"><input type="text" id="newCatIncome" placeholder="new category…"><button class="btn-ghost" id="addCatIncome">+ Add</button></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- edit modal -->
+<div id="modal" class="modal hidden">
+  <div class="modal-card card">
+    <h2 id="editTitle">Edit entry</h2>
+    <div class="type-toggle" id="editTypeToggle">
+      <button class="tt-btn tt-expense" data-type="expense">− Expense</button>
+      <button class="tt-btn tt-income" data-type="income">+ Income</button>
+    </div>
+    <label>Amount <input type="number" id="editAmount" min="0" step="any"></label>
+    <label id="editCategoryRow">Category <select id="editCategory"></select></label>
+    <label id="editWalletRow">Wallet <select id="editWallet"></select></label>
+    <label id="editFromRow">From wallet <select id="editFrom"></select></label>
+    <label id="editToRow">To wallet <select id="editTo"></select></label>
+    <label id="editToAmountRow">Received amount <input type="number" id="editToAmount" min="0" step="any"></label>
+    <label>Date <input type="date" id="editDate"></label>
+    <label>Note <input type="text" id="editNote" maxlength="300"></label>
+    <div class="modal-actions">
+      <button id="editDelete" class="btn-danger">Delete</button>
+      <span class="spacer"></span>
+      <button id="editCancel" class="btn-ghost">Cancel</button>
+      <button id="editSave" class="btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<!-- mobile bottom navigation -->
+<nav class="bottom-nav">
+  <button class="bn-btn active" data-view="dashboard"><span class="bn-ico">🏠</span><span>Home</span></button>
+  <button class="bn-btn" data-view="ledger"><span class="bn-ico">📒</span><span>Ledger</span></button>
+  <button class="bn-btn" data-view="budgets"><span class="bn-ico">🎯</span><span>Budgets</span></button>
+  <button class="bn-btn" data-view="settings"><span class="bn-ico">⚙️</span><span>Settings</span></button>
+</nav>
+
+<!-- cloud auth gate (only shown in Firebase mode when signed out) -->
+<div id="authGate" class="auth-gate hidden">
+  <div class="auth-card card">
+    <div class="brand-mark auth-mark">₭</div>
+    <h2>EZ Money — Cloud Sync</h2>
+    <p class="hint">Sign in to sync your money across your PC and phone. First time? Tap <b>Create account</b>.</p>
+    <label>Email <input type="email" id="authEmail" autocomplete="username" placeholder="you@example.com"></label>
+    <label>Password <input type="password" id="authPassword" autocomplete="current-password" placeholder="••••••••"></label>
+    <div id="authError" class="auth-error"></div>
+    <div class="auth-actions">
+      <button id="authSignIn" class="btn-primary">Sign in</button>
+      <button id="authSignUp" class="btn-ghost">Create account</button>
+    </div>
+    <button id="authReset" class="auth-link">Forgot password?</button>
+  </div>
+</div>
+
+<script src="defaults.js"></script>
+<script src="firebase-config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

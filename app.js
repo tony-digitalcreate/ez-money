@@ -1,0 +1,766 @@
+// EZ Money Manager frontend
+let DB = { transactions: [], settings: null, budgets: {} };
+let month = new Date().toISOString().slice(0, 7); // YYYY-MM
+let qaMode = 'expense';
+let editMode = 'expense';
+let editingId = null;
+let dashCurrency = null;
+
+const $ = id => document.getElementById(id);
+const api = (url, opts) => fetch(url, opts).then(r => r.json());
+const today = () => new Date().toISOString().slice(0, 10);
+const JH = { 'Content-Type': 'application/json' };
+
+// ---------- storage backends ----------
+// Local mode talks to the Node server; cloud mode (cloud.js) talks to Firestore.
+const ServerStore = {
+  mode: 'server',
+  onChange() {},
+  loadAll() { return api('/api/data'); },
+  async addTx(body) { const t = await api('/api/transactions', { method: 'POST', headers: JH, body: JSON.stringify(body) }); if (t.error) throw t.error; return t; },
+  async updateTx(id, body) { const t = await api('/api/transactions/' + id, { method: 'PUT', headers: JH, body: JSON.stringify(body) }); if (t.error) throw t.error; return t; },
+  async deleteTx(id) { await api('/api/transactions/' + id, { method: 'DELETE' }); },
+  saveSettings(s) { return api('/api/settings', { method: 'PUT', headers: JH, body: JSON.stringify(s) }); },
+  saveBudgets(b) { return api('/api/budgets', { method: 'PUT', headers: JH, body: JSON.stringify(b) }); }
+};
+let Store = ServerStore;
+
+const firebaseConfigured = () => {
+  const c = window.FIREBASE_CONFIG;
+  return !!(c && c.apiKey && !String(c.apiKey).startsWith('PASTE'));
+};
+
+// ---------- money / wallet helpers ----------
+const sym = code => (DB.settings.currencies && DB.settings.currencies[code]) || (code + ' ');
+function fmt(n, code) {
+  code = code || DB.settings.primaryCurrency;
+  const s = Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return `${n < 0 ? '−' : ''}${sym(code)}${s}`;
+}
+const walletOf = id => DB.settings.wallets.find(w => w.id === id);
+const walletName = id => (walletOf(id) || {}).name || 'Unknown';
+const walletCur = id => (walletOf(id) || {}).currency || DB.settings.primaryCurrency;
+const walletColor = id => (walletOf(id) || {}).color || '#9aa3ad';
+const catColor = (type, name) => (DB.settings.categories[type] || []).find(c => c.name === name)?.color || '#9aa3ad';
+const monthName = m => new Date(m + '-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+function presentCurrencies() {
+  const seen = [];
+  for (const w of DB.settings.wallets) if (!seen.includes(w.currency)) seen.push(w.currency);
+  return seen;
+}
+
+function computeBalances() {
+  const bal = {};
+  DB.settings.wallets.forEach(w => bal[w.id] = 0);
+  for (const t of DB.transactions) {
+    if (t.type === 'expense' && t.wallet in bal) bal[t.wallet] -= t.amount;
+    else if ((t.type === 'income' || t.type === 'topup') && t.wallet in bal) bal[t.wallet] += t.amount;
+    else if (t.type === 'transfer') {
+      if (t.fromWallet in bal) bal[t.fromWallet] -= t.amount;
+      if (t.toWallet in bal) bal[t.toWallet] += (t.toAmount != null ? t.toAmount : t.amount);
+    }
+  }
+  return bal;
+}
+
+function txInMonth(m) { return DB.transactions.filter(t => t.date.startsWith(m)); }
+
+// ---------- data ----------
+async function reload() {
+  DB = await Store.loadAll();
+  if (!DB.settings) DB.settings = window.EZ_DEFAULTS;
+  if (!dashCurrency || !presentCurrencies().includes(dashCurrency)) dashCurrency = DB.settings.primaryCurrency;
+  renderAll();
+}
+
+async function boot() {
+  registerServiceWorker();
+  setupInstallPrompt();
+  $('qaDate').value = today();
+  if (firebaseConfigured()) {
+    try {
+      await import('./cloud.js');
+      Store = window.EZCloud;
+      Store.init(window.FIREBASE_CONFIG, window.EZMONEY_ROOT);
+      Store.onChange(() => reload());
+      updateCloudUI('cloud', null);
+      Store.onAuth(async user => {
+        if (user) {
+          showAuthGate(false);
+          try { await Store.start(); } catch (e) { console.error(e); }
+          await reload();
+          updateCloudUI('cloud', user.email);
+        } else {
+          updateCloudUI('cloud', null);
+          showAuthGate(true);
+        }
+      });
+    } catch (e) {
+      console.error('Cloud init failed, falling back to local:', e);
+      Store = ServerStore;
+      updateCloudUI('local');
+      await reload();
+    }
+  } else {
+    Store = ServerStore;
+    updateCloudUI('local');
+    await reload();
+  }
+}
+
+// ---------- render ----------
+function renderAll() {
+  $('monthLabel').textContent = monthName(month);
+  renderQuickAdd();
+  renderDashboard();
+  renderLedger();
+  renderBudgets();
+  renderSettings();
+}
+
+function fillCategorySelect(sel, type, selected) {
+  sel.innerHTML = '';
+  for (const c of DB.settings.categories[type]) {
+    const o = document.createElement('option');
+    o.value = c.name; o.textContent = c.name;
+    if (c.name === selected) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+function fillWalletSelect(sel, selected) {
+  sel.innerHTML = '';
+  for (const w of DB.settings.wallets) {
+    const o = document.createElement('option');
+    o.value = w.id; o.textContent = w.name;
+    if (w.id === selected) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+const show = (id, on) => $(id).classList.toggle('hidden', !on);
+
+// ----- quick add -----
+function renderQuickAdd() {
+  document.querySelectorAll('#typeToggle .tt-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === qaMode));
+  const isEI = qaMode === 'expense' || qaMode === 'income';
+  show('qaCategory', isEI);
+  show('qaWallet', isEI || qaMode === 'topup');
+  show('qaFrom', qaMode === 'transfer');
+  show('qaArrow', qaMode === 'transfer');
+  show('qaTo', qaMode === 'transfer');
+
+  if (isEI) fillCategorySelect($('qaCategory'), qaMode, $('qaCategory').value);
+  fillWalletSelect($('qaWallet'), $('qaWallet').value || DB.settings.wallets[0]?.id);
+  fillWalletSelect($('qaFrom'), $('qaFrom').value || DB.settings.wallets[0]?.id);
+  fillWalletSelect($('qaTo'), $('qaTo').value || DB.settings.wallets[1]?.id);
+  updateQaReceived();
+  $('qaAmount').placeholder = qaMode === 'transfer' ? 'amount sent' : '0';
+}
+function updateQaReceived() {
+  const diff = qaMode === 'transfer' && walletCur($('qaFrom').value) !== walletCur($('qaTo').value);
+  show('qaToAmount', diff);
+}
+
+// ----- dashboard -----
+function renderDashboard() {
+  renderWalletOverview();
+  renderCurScope();
+  const txs = txInMonth(month).filter(t => (t.type === 'income' || t.type === 'expense') && walletCur(t.wallet) === dashCurrency);
+  const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const expense = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  $('statIncome').textContent = fmt(income, dashCurrency);
+  $('statExpense').textContent = fmt(expense, dashCurrency);
+  $('statBalance').textContent = fmt(income - expense, dashCurrency);
+
+  const now = new Date();
+  const isCurrent = month === now.toISOString().slice(0, 7);
+  const daysInMonth = new Date(+month.slice(0, 4), +month.slice(5, 7), 0).getDate();
+  const days = isCurrent ? now.getDate() : daysInMonth;
+  $('statDaily').textContent = fmt(days ? expense / days : 0, dashCurrency);
+
+  renderDonut(txs);
+  renderTrend();
+  renderRows($('recentList'), [...DB.transactions].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)).slice(0, 8));
+}
+
+function renderWalletOverview() {
+  const bal = computeBalances();
+  const box = $('walletBars');
+  box.innerHTML = '';
+  const totals = {};
+  for (const cur of presentCurrencies()) {
+    const wallets = DB.settings.wallets.filter(w => w.currency === cur);
+    const max = Math.max(1, ...wallets.map(w => Math.abs(bal[w.id])));
+    const sub = wallets.reduce((s, w) => s + bal[w.id], 0);
+    totals[cur] = sub;
+    const group = document.createElement('div');
+    group.className = 'wallet-group';
+    let rows = '';
+    for (const w of wallets) {
+      const b = bal[w.id];
+      const pct = Math.max(2, Math.abs(b) / max * 100);
+      rows += `<div class="wallet-bar-row">
+        <span class="wbr-name" title="${esc(w.name)}">${esc(w.name)}</span>
+        <div class="wbr-track"><div class="wbr-fill" style="width:${pct}%;background:${w.color}"></div></div>
+        <span class="wbr-val ${b < 0 ? 'neg' : ''}">${fmt(b, cur)}</span>
+      </div>`;
+    }
+    group.innerHTML = `<div class="wg-head"><span>${esc(cur)}</span><span class="wg-sub">${fmt(sub, cur)}</span></div>${rows}`;
+    box.appendChild(group);
+  }
+  $('woGrandTotals').innerHTML = presentCurrencies().map(c => `<span>${fmt(totals[c], c)}</span>`).join('');
+}
+
+function renderCurScope() {
+  const box = $('curScope');
+  box.innerHTML = '';
+  for (const cur of presentCurrencies()) {
+    const b = document.createElement('button');
+    b.textContent = `${sym(cur)} ${cur}`;
+    b.classList.toggle('active', cur === dashCurrency);
+    b.addEventListener('click', () => { dashCurrency = cur; renderDashboard(); });
+    box.appendChild(b);
+  }
+}
+
+function renderDonut(txs) {
+  const svg = $('donut'), legend = $('donutLegend');
+  const byCat = {};
+  for (const t of txs) if (t.type === 'expense') byCat[t.category] = (byCat[t.category] || 0) + t.amount;
+  const entries = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((s, e) => s + e[1], 0);
+  svg.innerHTML = ''; legend.innerHTML = '';
+  if (!total) {
+    svg.innerHTML = `<circle cx="100" cy="100" r="70" fill="none" stroke="#eef2f7" stroke-width="26"/><text x="100" y="105" text-anchor="middle" fill="#93a1b0" font-size="13" font-style="italic">no expenses</text>`;
+    return;
+  }
+  let angle = -90;
+  const R = 70, CX = 100, CY = 100;
+  for (const [name, amt] of entries) {
+    const sweep = (amt / total) * 360;
+    const a1 = angle * Math.PI / 180, a2 = (angle + sweep) * Math.PI / 180;
+    const large = sweep > 180 ? 1 : 0;
+    const x1 = CX + R * Math.cos(a1), y1 = CY + R * Math.sin(a1);
+    const x2 = CX + R * Math.cos(a2), y2 = CY + R * Math.sin(a2);
+    const color = catColor('expense', name);
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const d = sweep >= 359.99
+      ? `M ${CX} ${CY - R} A ${R} ${R} 0 1 1 ${CX - 0.01} ${CY - R}`
+      : `M ${x1} ${y1} A ${R} ${R} 0 ${large} 1 ${x2} ${y2}`;
+    p.setAttribute('d', d);
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', color);
+    p.setAttribute('stroke-width', '26');
+    svg.appendChild(p);
+    angle += sweep;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<i class="dot" style="background:${color}"></i><span>${esc(name)}</span><span class="amt">${fmt(amt, dashCurrency)} · ${Math.round(amt / total * 100)}%</span>`;
+    legend.appendChild(row);
+  }
+  const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  label.setAttribute('x', 100); label.setAttribute('y', 97); label.setAttribute('text-anchor', 'middle');
+  label.setAttribute('font-size', '11'); label.setAttribute('fill', '#93a1b0'); label.setAttribute('font-weight', '600');
+  label.textContent = 'TOTAL';
+  const val = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  val.setAttribute('x', 100); val.setAttribute('y', 114); val.setAttribute('text-anchor', 'middle');
+  val.setAttribute('font-size', '13'); val.setAttribute('fill', '#24303c'); val.setAttribute('font-weight', '800');
+  val.textContent = fmt(total, dashCurrency);
+  svg.appendChild(label); svg.appendChild(val);
+}
+
+function renderTrend() {
+  const svg = $('trend');
+  const months = [];
+  let [y, m] = month.split('-').map(Number);
+  for (let i = 5; i >= 0; i--) {
+    let mm = m - i, yy = y;
+    while (mm < 1) { mm += 12; yy--; }
+    months.push(`${yy}-${String(mm).padStart(2, '0')}`);
+  }
+  const data = months.map(mo => {
+    const txs = DB.transactions.filter(t => t.date.startsWith(mo) && walletCur(t.wallet) === dashCurrency);
+    return {
+      m: mo,
+      inc: txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0),
+      exp: txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+    };
+  });
+  const max = Math.max(1, ...data.flatMap(d => [d.inc, d.exp]));
+  const W = 520, H = 220, padB = 28, padT = 12, chartH = H - padB - padT;
+  const groupW = W / 6, barW = 26;
+  let out = '';
+  for (let i = 1; i <= 4; i++) {
+    const yy = padT + chartH * i / 4;
+    out += `<line x1="0" y1="${yy}" x2="${W}" y2="${yy}" stroke="#eef2f7" stroke-width="1"/>`;
+  }
+  data.forEach((d, i) => {
+    const cx = groupW * i + groupW / 2;
+    const hInc = d.inc / max * chartH, hExp = d.exp / max * chartH;
+    out += `<rect x="${cx - barW - 3}" y="${padT + chartH - hInc}" width="${barW}" height="${Math.max(hInc, d.inc ? 2 : 0)}" rx="5" fill="#2e9e5b" opacity=".85"/>`;
+    out += `<rect x="${cx + 3}" y="${padT + chartH - hExp}" width="${barW}" height="${Math.max(hExp, d.exp ? 2 : 0)}" rx="5" fill="#d9534a" opacity=".85"/>`;
+    const lbl = new Date(d.m + '-01T00:00:00').toLocaleDateString('en-US', { month: 'short' });
+    const bold = d.m === month ? 'font-weight="800" fill="#24303c"' : 'fill="#93a1b0"';
+    out += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="12" ${bold}>${lbl}</text>`;
+  });
+  svg.innerHTML = out;
+}
+
+// ----- ledger -----
+function renderLedger() {
+  // wallet filter options
+  const wsel = $('fltWallet');
+  const wkeep = wsel.value;
+  wsel.innerHTML = '<option value="">All wallets</option>';
+  for (const w of DB.settings.wallets) {
+    const o = document.createElement('option'); o.value = w.id; o.textContent = w.name; wsel.appendChild(o);
+  }
+  wsel.value = wkeep;
+  // category filter options
+  const csel = $('fltCategory');
+  const ckeep = csel.value;
+  csel.innerHTML = '<option value="">All categories</option>';
+  for (const kind of ['expense', 'income'])
+    for (const c of DB.settings.categories[kind]) {
+      const o = document.createElement('option'); o.value = c.name; o.textContent = c.name; csel.appendChild(o);
+    }
+  csel.value = ckeep;
+
+  const q = $('fltSearch').value.trim().toLowerCase();
+  const ftype = $('fltType').value, fwallet = $('fltWallet').value, fcat = $('fltCategory').value;
+  let txs = txInMonth(month);
+  if (ftype) txs = txs.filter(t => t.type === ftype);
+  if (fwallet) txs = txs.filter(t => t.wallet === fwallet || t.fromWallet === fwallet || t.toWallet === fwallet);
+  if (fcat) txs = txs.filter(t => t.category === fcat);
+  if (q) txs = txs.filter(t => (t.note || '').toLowerCase().includes(q) || (t.category || '').toLowerCase().includes(q) || walletName(t.wallet).toLowerCase().includes(q));
+  txs.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+
+  $('ledgerTitle').textContent = monthName(month);
+  $('ledgerCount').textContent = `${txs.length} ${txs.length === 1 ? 'entry' : 'entries'}`;
+  renderRows($('ledgerList'), txs);
+
+  // net income−expense per currency (transfers/top-ups excluded)
+  const net = {};
+  for (const t of txs) {
+    if (t.type !== 'income' && t.type !== 'expense') continue;
+    const c = walletCur(t.wallet);
+    net[c] = (net[c] || 0) + (t.type === 'income' ? t.amount : -t.amount);
+  }
+  const parts = Object.entries(net);
+  $('ledgerTotal').innerHTML = parts.length
+    ? parts.map(([c, v]) => `<span style="color:${v < 0 ? 'var(--red)' : 'var(--green)'}">${fmt(v, c)}</span>`).join(' &nbsp; ')
+    : '—';
+}
+
+function renderRows(container, txs) {
+  container.innerHTML = '';
+  if (!txs.length) {
+    container.innerHTML = '<div class="empty">Nothing written on this page yet ✎</div>';
+    return;
+  }
+  for (const t of txs) {
+    const row = document.createElement('div');
+    row.className = 'ledger-row';
+    const day = t.date.slice(8, 10) + ' ' + new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short' });
+    let catLabel, catCls = '', dotColor, note = t.note || '', walletChip, amountHtml;
+    if (t.type === 'transfer') {
+      catLabel = '⇄ Transfer'; catCls = 'transfer'; dotColor = 'transparent';
+      walletChip = `${esc(walletName(t.fromWallet))} → ${esc(walletName(t.toWallet))}`;
+      const sameCur = walletCur(t.fromWallet) === walletCur(t.toWallet);
+      amountHtml = `<span class="lr-amount transfer">${fmt(t.amount, walletCur(t.fromWallet))}${sameCur ? '' : ' → ' + fmt(t.toAmount, walletCur(t.toWallet))}</span>`;
+    } else if (t.type === 'topup') {
+      catLabel = '↑ Top-up'; catCls = 'topup'; dotColor = 'transparent';
+      walletChip = esc(walletName(t.wallet));
+      amountHtml = `<span class="lr-amount topup">+${fmt(t.amount, walletCur(t.wallet))}</span>`;
+    } else {
+      catLabel = esc(t.category); dotColor = catColor(t.type, t.category);
+      walletChip = esc(walletName(t.wallet));
+      amountHtml = `<span class="lr-amount ${t.type === 'expense' ? 'exp' : 'inc'}">${t.type === 'expense' ? '−' : '+'}${fmt(t.amount, walletCur(t.wallet))}</span>`;
+    }
+    row.innerHTML = `
+      <span class="lr-date">${day}</span>
+      <span class="lr-cat ${catCls}"><i class="dot" style="background:${dotColor}"></i>${catLabel}</span>
+      <span class="lr-note">${esc(note)}</span>
+      <span class="lr-wallet">${walletChip}</span>
+      ${amountHtml}`;
+    row.addEventListener('click', () => openEdit(t));
+    container.appendChild(row);
+  }
+}
+
+// ----- budgets -----
+function renderBudgets() {
+  $('budgetCurName').textContent = sym(DB.settings.primaryCurrency) + ' ' + DB.settings.primaryCurrency;
+  const list = $('budgetList');
+  list.innerHTML = '';
+  const spent = {};
+  for (const t of txInMonth(month))
+    if (t.type === 'expense' && walletCur(t.wallet) === DB.settings.primaryCurrency)
+      spent[t.category] = (spent[t.category] || 0) + t.amount;
+
+  for (const c of DB.settings.categories.expense) {
+    const budget = Number(DB.budgets[c.name] || 0);
+    const used = spent[c.name] || 0;
+    const pct = budget ? Math.min(100, used / budget * 100) : 0;
+    const row = document.createElement('div');
+    row.className = 'budget-row';
+    row.innerHTML = `
+      <span class="budget-name"><i class="dot" style="background:${c.color}"></i>${esc(c.name)}</span>
+      <input type="number" class="budget-input" min="0" step="any" placeholder="no limit" value="${budget || ''}" data-cat="${esc(c.name)}">
+      <div class="budget-bar"><div class="budget-fill ${used > budget && budget ? 'warn' : ''}" style="width:${pct}%"></div></div>
+      <span class="budget-status">${budget ? `${fmt(used, DB.settings.primaryCurrency)} of ${fmt(budget, DB.settings.primaryCurrency)}` : fmt(used, DB.settings.primaryCurrency) + ' spent'}</span>`;
+    list.appendChild(row);
+  }
+  list.querySelectorAll('.budget-input').forEach(inp => {
+    inp.addEventListener('change', async () => {
+      const v = Number(inp.value);
+      if (v > 0) DB.budgets[inp.dataset.cat] = v; else delete DB.budgets[inp.dataset.cat];
+      await Store.saveBudgets(DB.budgets);
+      renderBudgets();
+      toast('Budget saved');
+    });
+  });
+}
+
+// ----- settings -----
+function renderSettings() {
+  // currency options for the "add wallet" picker
+  const ncur = $('newWalletCur');
+  if (ncur.options.length !== Object.keys(DB.settings.currencies).length) {
+    ncur.innerHTML = '';
+    for (const code of Object.keys(DB.settings.currencies)) {
+      const o = document.createElement('option'); o.value = code; o.textContent = `${sym(code)} ${code}`; ncur.appendChild(o);
+    }
+  }
+  // wallets
+  const wl = $('walletList');
+  wl.innerHTML = '';
+  for (const w of DB.settings.wallets) {
+    const row = document.createElement('div');
+    row.className = 'wallet-set-row';
+    let opts = '';
+    for (const code of Object.keys(DB.settings.currencies))
+      opts += `<option value="${code}" ${code === w.currency ? 'selected' : ''}>${sym(code)} ${code}</option>`;
+    row.innerHTML = `
+      <i class="dot" style="background:${w.color}"></i>
+      <input type="text" value="${esc(w.name)}" data-id="${w.id}" class="wallet-name-input">
+      <select data-id="${w.id}" class="wallet-cur-input">${opts}</select>
+      <button class="cat-del" title="Delete wallet" data-id="${w.id}">✕</button>`;
+    wl.appendChild(row);
+  }
+  wl.querySelectorAll('.wallet-name-input').forEach(inp => inp.addEventListener('change', async () => {
+    const w = walletOf(inp.dataset.id); if (!w) return;
+    const v = inp.value.trim(); if (!v) { inp.value = w.name; return; }
+    w.name = v; await saveSettings(); toast('Wallet renamed');
+  }));
+  wl.querySelectorAll('.wallet-cur-input').forEach(sel => sel.addEventListener('change', async () => {
+    const w = walletOf(sel.dataset.id); if (!w) return;
+    w.currency = sel.value; await saveSettings(); toast('Currency updated');
+  }));
+  wl.querySelectorAll('.cat-del').forEach(btn => btn.addEventListener('click', () => deleteWallet(btn.dataset.id)));
+
+  // categories
+  for (const kind of ['expense', 'income']) {
+    const box = $(kind === 'expense' ? 'catExpense' : 'catIncome');
+    box.innerHTML = '';
+    for (const c of DB.settings.categories[kind]) {
+      const row = document.createElement('div');
+      row.className = 'cat-row';
+      row.innerHTML = `<i class="dot" style="background:${c.color}"></i><span>${esc(c.name)}</span><button class="cat-del" title="Delete">✕</button>`;
+      row.querySelector('.cat-del').addEventListener('click', () => deleteCategory(kind, c.name));
+      box.appendChild(row);
+    }
+  }
+}
+
+async function saveSettings() {
+  DB.settings = await Store.saveSettings(DB.settings);
+  renderAll();
+}
+
+const WALLET_PALETTE = ['#3566c4', '#5a91e0', '#2e9e5b', '#3bb3a9', '#e08a00', '#e0a800', '#c96f4a', '#8a6fbf', '#d94a8c', '#d9a441', '#4a90d9', '#7a8a99'];
+async function addWallet() {
+  const name = $('newWalletName').value.trim();
+  if (!name) return;
+  if (DB.settings.wallets.some(w => w.name.toLowerCase() === name.toLowerCase())) return toast('Wallet already exists');
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Math.random().toString(36).slice(2, 6);
+  DB.settings.wallets.push({ id, name, currency: $('newWalletCur').value, color: WALLET_PALETTE[DB.settings.wallets.length % WALLET_PALETTE.length] });
+  $('newWalletName').value = '';
+  await saveSettings();
+  toast(`Added "${name}"`);
+}
+async function deleteWallet(id) {
+  const inUse = DB.transactions.some(t => t.wallet === id || t.fromWallet === id || t.toWallet === id);
+  if (inUse && !confirm(`"${walletName(id)}" has entries. They'll remain but show as “Unknown”. Delete wallet?`)) return;
+  DB.settings.wallets = DB.settings.wallets.filter(w => w.id !== id);
+  await saveSettings();
+}
+
+const CAT_PALETTE = ['#e8734a', '#5aa469', '#e0a800', '#3bb3a9', '#8a6fbf', '#c96f4a', '#d94a8c', '#4a90d9', '#5a91e0', '#9aa3ad', '#d9534a', '#7a8a99', '#b5892f'];
+async function addCategory(kind, name) {
+  name = name.trim();
+  if (!name) return;
+  if (DB.settings.categories[kind].some(c => c.name.toLowerCase() === name.toLowerCase())) return toast('Category already exists');
+  const color = CAT_PALETTE[DB.settings.categories[kind].length % CAT_PALETTE.length];
+  DB.settings.categories[kind].push({ name, color });
+  await saveSettings();
+  toast(`Added "${name}"`);
+}
+async function deleteCategory(kind, name) {
+  const inUse = DB.transactions.some(t => t.type === kind && t.category === name);
+  if (inUse && !confirm(`"${name}" is used by existing entries. They keep the name but lose the color. Delete category?`)) return;
+  DB.settings.categories[kind] = DB.settings.categories[kind].filter(c => c.name !== name);
+  await saveSettings();
+}
+
+// ---------- quick add save ----------
+async function quickAdd() {
+  const amount = Number($('qaAmount').value);
+  if (!(amount > 0)) { $('qaAmount').focus(); return toast('Enter an amount'); }
+  const date = $('qaDate').value || today();
+  const note = $('qaNote').value;
+  let body, label;
+  if (qaMode === 'transfer') {
+    const fromW = $('qaFrom').value, toW = $('qaTo').value;
+    if (fromW === toW) return toast('Choose two different wallets');
+    body = { type: 'transfer', amount, fromWallet: fromW, toWallet: toW, date, note };
+    if (walletCur(fromW) !== walletCur(toW)) {
+      const toAmount = Number($('qaToAmount').value);
+      if (!(toAmount > 0)) { $('qaToAmount').focus(); return toast('Enter the received amount'); }
+      body.toAmount = toAmount;
+    }
+    label = 'Transfer recorded ✓';
+  } else if (qaMode === 'topup') {
+    body = { type: 'topup', amount, wallet: $('qaWallet').value, date, note };
+    label = 'Top-up recorded ✓';
+  } else {
+    body = { type: qaMode, amount, category: $('qaCategory').value, wallet: $('qaWallet').value, date, note };
+    label = (qaMode === 'expense' ? 'Expense' : 'Income') + ' recorded ✓';
+  }
+  try {
+    await Store.addTx(body);
+  } catch (e) { return toast('Error: ' + e); }
+  $('qaAmount').value = ''; $('qaNote').value = ''; $('qaToAmount').value = '';
+  await reload();
+  toast(label);
+  $('qaAmount').focus();
+}
+
+// ---------- edit modal ----------
+function openEdit(t) {
+  editingId = t.id;
+  editMode = t.type;
+  const isEI = t.type === 'expense' || t.type === 'income';
+  $('editTitle').textContent = { expense: 'Edit expense', income: 'Edit income', transfer: 'Edit transfer', topup: 'Edit top-up' }[t.type];
+  $('editTypeToggle').classList.toggle('hidden', !isEI);
+  $('editCategoryRow').classList.toggle('hidden', !isEI);
+  $('editWalletRow').classList.toggle('hidden', !(isEI || t.type === 'topup'));
+  $('editFromRow').classList.toggle('hidden', t.type !== 'transfer');
+  $('editToRow').classList.toggle('hidden', t.type !== 'transfer');
+
+  if (isEI) {
+    document.querySelectorAll('#editTypeToggle .tt-btn').forEach(b => b.classList.toggle('active', b.dataset.type === editMode));
+    fillCategorySelect($('editCategory'), editMode, t.category);
+    fillWalletSelect($('editWallet'), t.wallet);
+  } else if (t.type === 'topup') {
+    fillWalletSelect($('editWallet'), t.wallet);
+  } else {
+    fillWalletSelect($('editFrom'), t.fromWallet);
+    fillWalletSelect($('editTo'), t.toWallet);
+    $('editToAmount').value = t.toAmount != null ? t.toAmount : t.amount;
+  }
+  updateEditReceived();
+  $('editAmount').value = t.amount;
+  $('editDate').value = t.date;
+  $('editNote').value = t.note || '';
+  $('modal').classList.remove('hidden');
+}
+function updateEditReceived() {
+  const diff = editMode === 'transfer' && walletCur($('editFrom').value) !== walletCur($('editTo').value);
+  $('editToAmountRow').classList.toggle('hidden', !diff);
+}
+function closeEdit() { $('modal').classList.add('hidden'); editingId = null; }
+
+async function saveEdit() {
+  const amount = Number($('editAmount').value);
+  if (!(amount > 0)) return toast('Enter an amount');
+  const body = { type: editMode, amount, date: $('editDate').value, note: $('editNote').value };
+  if (editMode === 'transfer') {
+    body.fromWallet = $('editFrom').value; body.toWallet = $('editTo').value;
+    if (body.fromWallet === body.toWallet) return toast('Choose two different wallets');
+    if (walletCur(body.fromWallet) !== walletCur(body.toWallet)) {
+      const toAmount = Number($('editToAmount').value);
+      if (!(toAmount > 0)) return toast('Enter the received amount');
+      body.toAmount = toAmount;
+    }
+  } else if (editMode === 'topup') {
+    body.wallet = $('editWallet').value;
+  } else {
+    body.category = $('editCategory').value; body.wallet = $('editWallet').value;
+  }
+  try {
+    await Store.updateTx(editingId, body);
+  } catch (e) { return toast('Error: ' + e); }
+  closeEdit();
+  await reload();
+  toast('Saved ✓');
+}
+async function deleteEdit() {
+  if (!confirm('Delete this entry?')) return;
+  await Store.deleteTx(editingId);
+  closeEdit();
+  await reload();
+  toast('Deleted');
+}
+
+// ---------- helpers ----------
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+let toastTimer;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
+}
+function shiftMonth(delta) {
+  let [y, m] = month.split('-').map(Number);
+  m += delta;
+  while (m < 1) { m += 12; y--; }
+  while (m > 12) { m -= 12; y++; }
+  month = `${y}-${String(m).padStart(2, '0')}`;
+  renderAll();
+}
+
+// ---------- view switching (top tabs + mobile bottom nav) ----------
+function switchView(view) {
+  document.querySelectorAll('[data-view]').forEach(el => el.classList.toggle('active', el.dataset.view === view));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('[data-view]').forEach(el => el.addEventListener('click', () => switchView(el.dataset.view)));
+
+document.querySelectorAll('#typeToggle .tt-btn').forEach(b => b.addEventListener('click', () => { qaMode = b.dataset.mode; renderQuickAdd(); }));
+document.querySelectorAll('#editTypeToggle .tt-btn').forEach(b => b.addEventListener('click', () => {
+  editMode = b.dataset.type;
+  document.querySelectorAll('#editTypeToggle .tt-btn').forEach(x => x.classList.toggle('active', x === b));
+  fillCategorySelect($('editCategory'), editMode, $('editCategory').value);
+}));
+
+$('qaFrom').addEventListener('change', updateQaReceived);
+$('qaTo').addEventListener('change', updateQaReceived);
+$('editFrom').addEventListener('change', updateEditReceived);
+$('editTo').addEventListener('change', updateEditReceived);
+
+$('qaSave').addEventListener('click', quickAdd);
+$('qaAmount').addEventListener('keydown', e => { if (e.key === 'Enter') quickAdd(); });
+$('qaNote').addEventListener('keydown', e => { if (e.key === 'Enter') quickAdd(); });
+
+$('prevMonth').addEventListener('click', () => shiftMonth(-1));
+$('nextMonth').addEventListener('click', () => shiftMonth(1));
+
+['fltSearch', 'fltType', 'fltWallet', 'fltCategory'].forEach(id => $(id).addEventListener('input', renderLedger));
+$('btnExport').addEventListener('click', exportCSV);
+
+$('editSave').addEventListener('click', saveEdit);
+$('editCancel').addEventListener('click', closeEdit);
+$('editDelete').addEventListener('click', deleteEdit);
+$('modal').addEventListener('click', e => { if (e.target === $('modal')) closeEdit(); });
+
+$('addWallet').addEventListener('click', addWallet);
+$('newWalletName').addEventListener('keydown', e => { if (e.key === 'Enter') addWallet(); });
+$('addCatExpense').addEventListener('click', () => { addCategory('expense', $('newCatExpense').value); $('newCatExpense').value = ''; });
+$('addCatIncome').addEventListener('click', () => { addCategory('income', $('newCatIncome').value); $('newCatIncome').value = ''; });
+$('newCatExpense').addEventListener('keydown', e => { if (e.key === 'Enter') { addCategory('expense', e.target.value); e.target.value = ''; } });
+$('newCatIncome').addEventListener('keydown', e => { if (e.key === 'Enter') { addCategory('income', e.target.value); e.target.value = ''; } });
+
+// ---------- CSV export (server endpoint locally, client-side in cloud mode) ----------
+function exportCSV() {
+  if (Store.mode === 'server') { window.location.href = '/api/export?month=' + month; return; }
+  const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+  const rows = ['date,type,wallet,category,amount,note'];
+  const list = txInMonth(month).slice().sort((a, b) => a.date.localeCompare(b.date));
+  for (const t of list) {
+    let wallet, category, amount;
+    if (t.type === 'transfer') { wallet = `${walletName(t.fromWallet)} -> ${walletName(t.toWallet)}`; category = 'Transfer'; amount = t.amount; }
+    else if (t.type === 'topup') { wallet = walletName(t.wallet); category = 'Top-up'; amount = t.amount; }
+    else { wallet = walletName(t.wallet); category = t.category; amount = t.amount; }
+    rows.push([t.date, t.type, esc(wallet), esc(category), amount, esc(t.note || '')].join(','));
+  }
+  const blob = new Blob(['﻿' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `ez-money-${month}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ---------- PWA: service worker + install prompt ----------
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW:', e)));
+  }
+}
+let deferredPrompt = null;
+function setupInstallPrompt() {
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; $('installBtn').classList.remove('hidden'); });
+  window.addEventListener('appinstalled', () => { deferredPrompt = null; $('installBtn').classList.add('hidden'); });
+  $('installBtn').addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    $('installBtn').classList.add('hidden');
+  });
+}
+
+// ---------- cloud sync UI ----------
+function updateCloudUI(mode, email) {
+  const badge = $('cloudBadge'), status = $('cloudStatus'), signOutBtn = $('cloudSignOut');
+  if (mode === 'local') {
+    badge.textContent = '● Local';
+    badge.className = 'sync-badge local';
+    status.innerHTML = 'Running in <b>local mode</b> — data is stored on this PC via the EZ Money server. To sync your PC and phone, set up Firebase (see <b>SETUP-FIREBASE.md</b>).';
+    signOutBtn.classList.add('hidden');
+  } else if (email) {
+    badge.textContent = '● Synced';
+    badge.className = 'sync-badge ok';
+    status.innerHTML = `Cloud sync <b>on</b>. Signed in as <b>${esc(email)}</b>. Your entries sync across every device you log in on.`;
+    signOutBtn.classList.remove('hidden');
+  } else {
+    badge.textContent = '● Cloud';
+    badge.className = 'sync-badge cloud';
+    status.innerHTML = 'Cloud sync is configured. Sign in to start syncing.';
+    signOutBtn.classList.add('hidden');
+  }
+}
+function showAuthGate(on) { $('authGate').classList.toggle('hidden', !on); }
+function authErr(msg) { $('authError').textContent = msg || ''; }
+async function doAuth(kind) {
+  const email = $('authEmail').value.trim(), pw = $('authPassword').value;
+  if (!email || !pw) return authErr('Enter your email and password.');
+  authErr('');
+  try {
+    if (kind === 'up') await Store.signUp(email, pw);
+    else await Store.signIn(email, pw);
+  } catch (e) {
+    authErr(String(e.message || e).replace('Firebase: ', ''));
+  }
+}
+
+// auth gate + cloud controls
+$('authSignIn').addEventListener('click', () => doAuth('in'));
+$('authSignUp').addEventListener('click', () => doAuth('up'));
+$('authPassword').addEventListener('keydown', e => { if (e.key === 'Enter') doAuth('in'); });
+$('authReset').addEventListener('click', async () => {
+  const email = $('authEmail').value.trim();
+  if (!email) return authErr('Enter your email first, then tap reset.');
+  try { await Store.resetPassword(email); authErr(''); toast('Password reset email sent'); }
+  catch (e) { authErr(String(e.message || e).replace('Firebase: ', '')); }
+});
+$('cloudSignOut').addEventListener('click', async () => { await Store.signOut(); toast('Signed out'); });
+
+// ---------- init ----------
+$('installBtn').classList.add('hidden');
+$('qaDate').value = today();
+boot();
