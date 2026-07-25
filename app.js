@@ -583,29 +583,31 @@ function renderReport() {
 }
 
 // ----- reconcile (fix wallet to actual) -----
-let recWalletId = null;
+function updateRecInfo() {
+  const w = walletOf($('recWallet').value);
+  if (!w) { $('recInfo').textContent = ''; return; }
+  const bal = computeBalances()[w.id] || 0;
+  $('recInfo').innerHTML = `The app shows <b>${fmt(bal, w.currency)}</b> in <b>${esc(w.name)}</b>. Type what the bank/app really says and I'll post one adjustment for the difference.`;
+}
 function openReconcile(id) {
-  const w = walletOf(id);
-  if (!w) return;
-  recWalletId = id;
-  const bal = computeBalances()[id] || 0;
-  $('recInfo').innerHTML = `<b>${esc(w.name)}</b> — the app shows <b>${fmt(bal, w.currency)}</b>. Type what the bank/app really says and I'll post one adjustment for the difference.`;
+  fillWalletSelect($('recWallet'), id || DB.settings.wallets[0]?.id);
+  updateRecInfo();
   $('recActual').value = '';
   $('recNote').value = '';
   $('recModal').classList.remove('hidden');
   $('recActual').focus();
 }
-function closeReconcile() { $('recModal').classList.add('hidden'); recWalletId = null; }
+function closeReconcile() { $('recModal').classList.add('hidden'); }
 async function saveReconcile() {
-  const w = walletOf(recWalletId);
+  const w = walletOf($('recWallet').value);
   if (!w) return closeReconcile();
   const actual = Number($('recActual').value);
   if ($('recActual').value === '' || !isFinite(actual)) return toast('Enter the actual balance');
-  const current = computeBalances()[recWalletId] || 0;
+  const current = computeBalances()[w.id] || 0;
   const delta = actual - current;
   if (delta === 0) { closeReconcile(); return toast('Already matches — nothing to fix ✓'); }
   try {
-    await Store.addTx({ type: 'adjust', wallet: recWalletId, delta, date: today(), note: $('recNote').value || 'reconcile' });
+    await Store.addTx({ type: 'adjust', wallet: w.id, delta, date: today(), note: $('recNote').value || 'reconcile' });
   } catch (e) { return toast('Error: ' + e); }
   closeReconcile();
   await reload();
@@ -896,6 +898,8 @@ $('repPrevYear').addEventListener('click', () => { reportYear--; renderReport();
 $('repNextYear').addEventListener('click', () => { reportYear++; renderReport(); });
 $('recSave').addEventListener('click', saveReconcile);
 $('recCancel').addEventListener('click', closeReconcile);
+$('recWallet').addEventListener('change', updateRecInfo);
+$('btnAdjust').addEventListener('click', () => openReconcile(null));
 $('recActual').addEventListener('keydown', e => { if (e.key === 'Enter') saveReconcile(); });
 $('recModal').addEventListener('click', e => { if (e.target === $('recModal')) closeReconcile(); });
 

@@ -87,6 +87,7 @@
         <span id="woGrandTotals" class="wo-grand"></span>
       </div>
       <div id="walletBars" class="wallet-bars"></div>
+      <button id="btnAdjust" class="btn-ghost adjust-btn">⚖ Adjustment — fix a wallet to its real balance</button>
     </div>
 
     <div class="scope-row">
@@ -270,7 +271,8 @@
 <!-- reconcile modal -->
 <div id="recModal" class="modal hidden">
   <div class="modal-card card">
-    <h2>⚖ Reconcile wallet</h2>
+    <h2>⚖ Adjustment</h2>
+    <label>Wallet <select id="recWallet"></select></label>
     <p class="hint" id="recInfo"></p>
     <label>Actual balance right now <input type="number" id="recActual" step="any" placeholder="what the bank really says"></label>
     <label>Note <input type="text" id="recNote" placeholder="reconcile (optional)" maxlength="300"></label>

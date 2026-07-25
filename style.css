@@ -183,6 +183,7 @@ input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: v
 }
 .wallet-bar-row:hover .wbr-fix, .wbr-fix:focus { opacity: 1; }
 .wbr-fix:hover { background: var(--blue-soft); color: var(--blue); }
+.adjust-btn { display: none; } /* desktop uses the per-row ⚖ icons */
 .wbr-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--ink); }
 .wbr-track { height: 14px; background: #f0f4f8; border-radius: 7px; overflow: hidden; }
 .wbr-fill { height: 100%; border-radius: 7px; min-width: 2px; transition: width .35s; }
@@ -441,7 +442,10 @@ input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: v
   .rep-cat-row { grid-template-columns: 110px 1fr auto; gap: .5rem; font-size: .8rem; }
   .rep-cat-amt em { display: none; }
   .rep-table-wrap { padding: .3rem .8rem .8rem; }
-  .wbr-fix { opacity: 1; } /* no hover on touch — keep visible */
+
+  /* phone: no per-row ⚖ (it wraps ugly) — use the Adjustment button instead */
+  .wbr-fix { display: none; }
+  .adjust-btn { display: block; width: 100%; margin-top: .7rem; padding: .65rem; font-size: .9rem; }
 
   .filter-bar { flex-wrap: wrap; }
   .filter-bar #fltSearch { flex-basis: 100%; }
