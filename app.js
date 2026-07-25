@@ -26,6 +26,7 @@ const ServerStore = {
 let Store = ServerStore;
 
 const firebaseConfigured = () => {
+  if (new URLSearchParams(location.search).has('local')) return false; // ?local=1 forces local server mode (testing)
   const c = window.FIREBASE_CONFIG;
   return !!(c && c.apiKey && !String(c.apiKey).startsWith('PASTE'));
 };
@@ -66,6 +67,61 @@ function computeBalances() {
 
 function txInMonth(m) { return DB.transactions.filter(t => t.date.startsWith(m)); }
 
+// ---------- exchange rates (Total Asset) ----------
+// Daily rates from open.er-api.com (no key). Cached in localStorage so the
+// installed PWA still shows totals offline using the last known rate.
+const FX_KEY = 'ezmoney-fx';
+let FX = null; // { fetchedOn: 'YYYY-MM-DD', apiDate, rates: { USD:1, LAK:…, THB:…, … } }
+const isoCur = c => c === 'KIP' ? 'LAK' : c; // app uses KIP; ISO code is LAK
+
+async function loadRates(force) {
+  try { const c = JSON.parse(localStorage.getItem(FX_KEY)); if (c && c.rates) FX = c; } catch {}
+  const todayStr = today();
+  if (!force && FX && FX.fetchedOn === todayStr) { renderTotalAsset(); return; }
+  try {
+    const r = await fetch('https://open.er-api.com/v6/latest/USD');
+    const j = await r.json();
+    if (j && j.result === 'success' && j.rates) {
+      FX = { fetchedOn: todayStr, apiDate: j.time_last_update_utc, rates: j.rates };
+      localStorage.setItem(FX_KEY, JSON.stringify(FX));
+      if (force) toast('Rates updated ✓');
+    }
+  } catch {} // offline → keep cached FX (or null)
+  renderTotalAsset();
+}
+
+function fxConvert(amount, from, to) {
+  if (from === to) return amount;
+  if (!FX) return null;
+  const rf = FX.rates[isoCur(from)], rt = FX.rates[isoCur(to)];
+  if (!rf || !rt) return null;
+  return amount / rf * rt;
+}
+
+function renderTotalAsset() {
+  if (!DB.settings) return;
+  const bal = computeBalances();
+  const perCur = {};
+  for (const w of DB.settings.wallets) perCur[w.currency] = (perCur[w.currency] || 0) + bal[w.id];
+  for (const target of ['KIP', 'THB', 'USD']) {
+    let total = 0, ok = true;
+    for (const [cur, amt] of Object.entries(perCur)) {
+      const v = fxConvert(amt, cur, target);
+      if (v === null) { ok = false; break; }
+      total += v;
+    }
+    $('ta' + target).textContent = ok ? fmt(target === 'KIP' ? Math.round(total) : total, target) : '—';
+  }
+  const line = $('taRateLine');
+  if (FX) {
+    const kip = FX.rates.LAK, thb = FX.rates.THB;
+    const when = FX.fetchedOn === today() ? "today's rate" : 'rate from ' + FX.fetchedOn;
+    line.textContent = `$1 = ₭${Math.round(kip).toLocaleString('en-US')} · ฿${thb.toFixed(2)} — ${when}`;
+  } else {
+    line.textContent = 'No exchange rates yet — go online once to fetch them.';
+  }
+}
+
 // ---------- data ----------
 async function reload() {
   DB = await Store.loadAll();
@@ -78,6 +134,7 @@ async function boot() {
   registerServiceWorker();
   setupInstallPrompt();
   $('qaDate').value = today();
+  loadRates(); // fire-and-forget; re-renders Total Asset when rates arrive
   if (firebaseConfigured()) {
     try {
       await import('./cloud.js');
@@ -112,6 +169,7 @@ async function boot() {
 // ---------- render ----------
 function renderAll() {
   $('monthLabel').textContent = monthName(month);
+  renderTotalAsset();
   renderQuickAdd();
   renderDashboard();
   renderLedger();
@@ -658,6 +716,7 @@ $('qaNote').addEventListener('keydown', e => { if (e.key === 'Enter') quickAdd()
 
 $('prevMonth').addEventListener('click', () => shiftMonth(-1));
 $('nextMonth').addEventListener('click', () => shiftMonth(1));
+$('taRefresh').addEventListener('click', () => loadRates(true));
 
 ['fltSearch', 'fltType', 'fltWallet', 'fltCategory'].forEach(id => $(id).addEventListener('input', renderLedger));
 $('btnExport').addEventListener('click', exportCSV);

@@ -42,6 +42,20 @@
   </div>
 </header>
 
+<!-- total asset — combined worth of every wallet, converted at today's rate -->
+<section class="total-asset card">
+  <div class="ta-head">
+    <h2>Total Asset</h2>
+    <button id="taRefresh" class="icon-btn" title="Refresh exchange rates">⟳</button>
+  </div>
+  <div class="ta-values">
+    <div class="ta-item ta-main"><span class="ta-cur">₭ KIP</span><span class="ta-num" id="taKIP">—</span></div>
+    <div class="ta-item"><span class="ta-cur">฿ THB</span><span class="ta-num" id="taTHB">—</span></div>
+    <div class="ta-item"><span class="ta-cur">$ USD</span><span class="ta-num" id="taUSD">—</span></div>
+  </div>
+  <div class="ta-rateline" id="taRateLine">fetching today's rates…</div>
+</section>
+
 <!-- quick add — adapts to the chosen mode -->
 <section class="quick-add card">
   <div class="type-toggle" id="typeToggle">

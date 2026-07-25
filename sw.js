@@ -1,5 +1,5 @@
 // EZ Money Manager service worker — offline app shell.
-const CACHE = 'ezmoney-v2';
+const CACHE = 'ezmoney-v3';
 const SHELL = [
   './',
   './index.html',
@@ -30,7 +30,7 @@ self.addEventListener('fetch', e => {
 
   // never cache app data or Firestore/Auth traffic — must hit the network
   if (url.pathname.startsWith('/api/') ||
-      /firestore\.googleapis\.com|firebaseio\.com|identitytoolkit\.googleapis\.com|securetoken\.googleapis\.com/.test(url.host)) {
+      /firestore\.googleapis\.com|firebaseio\.com|identitytoolkit\.googleapis\.com|securetoken\.googleapis\.com|open\.er-api\.com/.test(url.host)) {
     return; // default network handling
   }
 
