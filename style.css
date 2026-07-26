@@ -267,6 +267,7 @@ input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: v
   max-width: 150px; overflow: hidden; text-overflow: ellipsis;
 }
 .lr-amount { font-weight: 700; flex: none; min-width: 96px; text-align: right; }
+.lr-kip { font-style: normal; font-weight: 600; font-size: .78em; color: var(--ink-faint); white-space: nowrap; }
 .lr-amount.exp { color: var(--red); }
 .lr-amount.inc { color: var(--green); }
 .lr-amount.topup { color: var(--blue); }

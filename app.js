@@ -473,6 +473,15 @@ function renderLedger() {
     : '—';
 }
 
+// "(₭134,543)" hint shown after a foreign-currency amount so local reading is instant
+function kipHint(amount, cur) {
+  const primary = DB.settings.primaryCurrency;
+  if (cur === primary) return '';
+  const v = fxConvert(Math.abs(amount), cur, primary);
+  if (v === null) return '';
+  return ` <em class="lr-kip">(${fmt(v, primary)})</em>`;
+}
+
 function renderRows(container, txs) {
   container.innerHTML = '';
   if (!txs.length) {
@@ -487,20 +496,25 @@ function renderRows(container, txs) {
     if (t.type === 'transfer') {
       catLabel = '⇄ Transfer'; catCls = 'transfer'; dotColor = 'transparent';
       walletChip = `${esc(walletName(t.fromWallet))} → ${esc(walletName(t.toWallet))}`;
-      const sameCur = walletCur(t.fromWallet) === walletCur(t.toWallet);
-      amountHtml = `<span class="lr-amount transfer">${fmt(t.amount, walletCur(t.fromWallet))}${sameCur ? '' : ' → ' + fmt(t.toAmount, walletCur(t.toWallet))}</span>`;
+      const fromCur = walletCur(t.fromWallet), toCur = walletCur(t.toWallet);
+      const sameCur = fromCur === toCur;
+      // cross-currency transfers already show both sides; same-currency foreign ones get the ₭ hint
+      amountHtml = `<span class="lr-amount transfer">${fmt(t.amount, fromCur)}${sameCur ? kipHint(t.amount, fromCur) : ' → ' + fmt(t.toAmount, toCur)}</span>`;
     } else if (t.type === 'topup') {
       catLabel = '↑ Top-up'; catCls = 'topup'; dotColor = 'transparent';
       walletChip = esc(walletName(t.wallet));
-      amountHtml = `<span class="lr-amount topup">+${fmt(t.amount, walletCur(t.wallet))}</span>`;
+      const cur = walletCur(t.wallet);
+      amountHtml = `<span class="lr-amount topup">+${fmt(t.amount, cur)}${kipHint(t.amount, cur)}</span>`;
     } else if (t.type === 'adjust') {
       catLabel = '⚖ Adjust'; catCls = 'adjust'; dotColor = 'transparent';
       walletChip = esc(walletName(t.wallet));
-      amountHtml = `<span class="lr-amount adjust">${t.delta >= 0 ? '+' : '−'}${fmt(Math.abs(t.delta), walletCur(t.wallet))}</span>`;
+      const cur = walletCur(t.wallet);
+      amountHtml = `<span class="lr-amount adjust">${t.delta >= 0 ? '+' : '−'}${fmt(Math.abs(t.delta), cur)}${kipHint(t.delta, cur)}</span>`;
     } else {
       catLabel = esc(t.category); dotColor = catColor(t.type, t.category);
       walletChip = esc(walletName(t.wallet));
-      amountHtml = `<span class="lr-amount ${t.type === 'expense' ? 'exp' : 'inc'}">${t.type === 'expense' ? '−' : '+'}${fmt(t.amount, walletCur(t.wallet))}</span>`;
+      const cur = walletCur(t.wallet);
+      amountHtml = `<span class="lr-amount ${t.type === 'expense' ? 'exp' : 'inc'}">${t.type === 'expense' ? '−' : '+'}${fmt(t.amount, cur)}${kipHint(t.amount, cur)}</span>`;
     }
     row.innerHTML = `
       <span class="lr-date">${day}</span>
