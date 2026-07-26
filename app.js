@@ -35,7 +35,9 @@ const firebaseConfigured = () => {
 const sym = code => (DB.settings.currencies && DB.settings.currencies[code]) || (code + ' ');
 function fmt(n, code) {
   code = code || DB.settings.primaryCurrency;
-  const s = Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  // Kip has no practical subunit — always show whole numbers (converted values included)
+  const digits = code === 'KIP' ? 0 : 2;
+  const s = Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: digits });
   return `${n < 0 ? '−' : ''}${sym(code)}${s}`;
 }
 const walletOf = id => DB.settings.wallets.find(w => w.id === id);
@@ -89,6 +91,8 @@ async function loadRates(force) {
     }
   } catch {} // offline → keep cached FX (or null)
   renderTotalAsset();
+  // 'All (₭)' charts convert with FX — refresh them now that rates are here
+  if (DB.settings) { renderDashboard(); renderReport(); renderBudgets(); }
 }
 
 function fxConvert(amount, from, to) {
@@ -97,6 +101,24 @@ function fxConvert(amount, from, to) {
   const rf = FX.rates[isoCur(from)], rt = FX.rates[isoCur(to)];
   if (!rf || !rt) return null;
   return amount / rf * rt;
+}
+
+// ---------- chart scope: 'ALL' (everything converted to KIP) or one currency ----------
+const scopeCur = () => dashCurrency === 'ALL' ? DB.settings.primaryCurrency : dashCurrency;
+const inScope = t => dashCurrency === 'ALL' || walletCur(t.wallet) === dashCurrency;
+// a transaction's amount expressed in the scope currency (0 if rates missing)
+function scopeAmt(t) {
+  const target = scopeCur(), from = walletCur(t.wallet);
+  if (from === target) return t.amount;
+  const v = fxConvert(t.amount, from, target);
+  return v === null ? 0 : v;
+}
+// expense amount in the PRIMARY currency regardless of scope (budgets)
+function primaryAmt(t) {
+  const primary = DB.settings.primaryCurrency, from = walletCur(t.wallet);
+  if (from === primary) return t.amount;
+  const v = fxConvert(t.amount, from, primary);
+  return v === null ? 0 : v;
 }
 
 function renderTotalAsset() {
@@ -127,7 +149,7 @@ function renderTotalAsset() {
 async function reload() {
   DB = await Store.loadAll();
   if (!DB.settings) DB.settings = window.EZ_DEFAULTS;
-  if (!dashCurrency || !presentCurrencies().includes(dashCurrency)) dashCurrency = DB.settings.primaryCurrency;
+  if (!dashCurrency || (dashCurrency !== 'ALL' && !presentCurrencies().includes(dashCurrency))) dashCurrency = 'ALL';
   renderAll();
 }
 
@@ -225,18 +247,18 @@ function updateQaReceived() {
 function renderDashboard() {
   renderWalletOverview();
   renderCurScope();
-  const txs = txInMonth(month).filter(t => (t.type === 'income' || t.type === 'expense') && walletCur(t.wallet) === dashCurrency);
-  const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const expense = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  $('statIncome').textContent = fmt(income, dashCurrency);
-  $('statExpense').textContent = fmt(expense, dashCurrency);
-  $('statBalance').textContent = fmt(income - expense, dashCurrency);
+  const txs = txInMonth(month).filter(t => (t.type === 'income' || t.type === 'expense') && inScope(t));
+  const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + scopeAmt(t), 0);
+  const expense = txs.filter(t => t.type === 'expense').reduce((s, t) => s + scopeAmt(t), 0);
+  $('statIncome').textContent = fmt(income, scopeCur());
+  $('statExpense').textContent = fmt(expense, scopeCur());
+  $('statBalance').textContent = fmt(income - expense, scopeCur());
 
   const now = new Date();
   const isCurrent = month === now.toISOString().slice(0, 7);
   const daysInMonth = new Date(+month.slice(0, 4), +month.slice(5, 7), 0).getDate();
   const days = isCurrent ? now.getDate() : daysInMonth;
-  $('statDaily').textContent = fmt(days ? expense / days : 0, dashCurrency);
+  $('statDaily').textContent = fmt(days ? expense / days : 0, scopeCur());
 
   renderDonut(txs);
   renderWeekday(txs);
@@ -275,12 +297,13 @@ function renderWalletOverview() {
 }
 
 function renderCurScope() {
+  const primary = DB.settings.primaryCurrency;
   for (const boxId of ['curScope', 'repCurScope']) {
     const box = $(boxId);
     box.innerHTML = '';
-    for (const cur of presentCurrencies()) {
+    for (const cur of ['ALL', ...presentCurrencies()]) {
       const b = document.createElement('button');
-      b.textContent = `${sym(cur)} ${cur}`;
+      b.textContent = cur === 'ALL' ? `All (${sym(primary)})` : `${sym(cur)} ${cur}`;
       b.classList.toggle('active', cur === dashCurrency);
       b.addEventListener('click', () => { dashCurrency = cur; renderDashboard(); renderReport(); });
       box.appendChild(b);
@@ -293,7 +316,7 @@ function renderWeekday(txs) {
   const svg = $('weekday');
   const days = [0, 0, 0, 0, 0, 0, 0]; // Mon..Sun
   for (const t of txs) if (t.type === 'expense')
-    days[(new Date(t.date + 'T00:00:00').getDay() + 6) % 7] += t.amount;
+    days[(new Date(t.date + 'T00:00:00').getDay() + 6) % 7] += scopeAmt(t);
   const max = Math.max(...days);
   const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const W = 380, H = 220, padB = 28, padT = 26, chartH = H - padB - padT;
@@ -310,7 +333,7 @@ function renderWeekday(txs) {
       const cx = groupW * i + groupW / 2;
       const h = v / max * chartH;
       const top = v === max;
-      out += `<rect x="${cx - barW / 2}" y="${padT + chartH - h}" width="${barW}" height="${Math.max(h, v ? 2 : 0)}" rx="6" fill="#d9534a" opacity="${top ? '1' : '.55'}"><title>${labels[i]}: ${fmt(v, dashCurrency)}</title></rect>`;
+      out += `<rect x="${cx - barW / 2}" y="${padT + chartH - h}" width="${barW}" height="${Math.max(h, v ? 2 : 0)}" rx="6" fill="#d9534a" opacity="${top ? '1' : '.55'}"><title>${labels[i]}: ${fmt(v, scopeCur())}</title></rect>`;
       if (v) {
         const compact = v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? Math.round(v / 1e3) + 'k' : String(Math.round(v));
         out += `<text x="${cx}" y="${padT + chartH - h - 6}" text-anchor="middle" font-size="10" font-weight="${top ? 800 : 600}" fill="${top ? '#24303c' : '#93a1b0'}">${compact}</text>`;
@@ -324,7 +347,7 @@ function renderWeekday(txs) {
 function renderDonut(txs) {
   const svg = $('donut'), legend = $('donutLegend');
   const byCat = {};
-  for (const t of txs) if (t.type === 'expense') byCat[t.category] = (byCat[t.category] || 0) + t.amount;
+  for (const t of txs) if (t.type === 'expense') byCat[t.category] = (byCat[t.category] || 0) + scopeAmt(t);
   const entries = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
   const total = entries.reduce((s, e) => s + e[1], 0);
   svg.innerHTML = ''; legend.innerHTML = '';
@@ -353,7 +376,7 @@ function renderDonut(txs) {
     angle += sweep;
     const row = document.createElement('div');
     row.className = 'row';
-    row.innerHTML = `<i class="dot" style="background:${color}"></i><span>${esc(name)}</span><span class="amt">${fmt(amt, dashCurrency)} · ${Math.round(amt / total * 100)}%</span>`;
+    row.innerHTML = `<i class="dot" style="background:${color}"></i><span>${esc(name)}</span><span class="amt">${fmt(amt, scopeCur())} · ${Math.round(amt / total * 100)}%</span>`;
     legend.appendChild(row);
   }
   const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -363,7 +386,7 @@ function renderDonut(txs) {
   const val = document.createElementNS('http://www.w3.org/2000/svg', 'text');
   val.setAttribute('x', 100); val.setAttribute('y', 114); val.setAttribute('text-anchor', 'middle');
   val.setAttribute('font-size', '13'); val.setAttribute('fill', '#24303c'); val.setAttribute('font-weight', '800');
-  val.textContent = fmt(total, dashCurrency);
+  val.textContent = fmt(total, scopeCur());
   svg.appendChild(label); svg.appendChild(val);
 }
 
@@ -377,11 +400,11 @@ function renderTrend() {
     months.push(`${yy}-${String(mm).padStart(2, '0')}`);
   }
   const data = months.map(mo => {
-    const txs = DB.transactions.filter(t => t.date.startsWith(mo) && walletCur(t.wallet) === dashCurrency);
+    const txs = DB.transactions.filter(t => t.date.startsWith(mo) && inScope(t));
     return {
       m: mo,
-      inc: txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0),
-      exp: txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+      inc: txs.filter(t => t.type === 'income').reduce((s, t) => s + scopeAmt(t), 0),
+      exp: txs.filter(t => t.type === 'expense').reduce((s, t) => s + scopeAmt(t), 0)
     };
   });
   const max = Math.max(1, ...data.flatMap(d => [d.inc, d.exp]));
@@ -496,25 +519,24 @@ let reportYear = new Date().getFullYear();
 function renderReport() {
   if (!DB.settings) return;
   $('repYearLabel').textContent = reportYear;
-  const inCur = t => walletCur(t.wallet) === dashCurrency;
   const year = String(reportYear);
-  const txs = DB.transactions.filter(t => t.date.startsWith(year) && (t.type === 'income' || t.type === 'expense') && inCur(t));
+  const txs = DB.transactions.filter(t => t.date.startsWith(year) && (t.type === 'income' || t.type === 'expense') && inScope(t));
 
   const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
   const data = months.map(mo => {
     const mt = txs.filter(t => t.date.startsWith(mo));
     return {
       m: mo,
-      inc: mt.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0),
-      exp: mt.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+      inc: mt.filter(t => t.type === 'income').reduce((s, t) => s + scopeAmt(t), 0),
+      exp: mt.filter(t => t.type === 'expense').reduce((s, t) => s + scopeAmt(t), 0)
     };
   });
 
   const totInc = data.reduce((s, d) => s + d.inc, 0);
   const totExp = data.reduce((s, d) => s + d.exp, 0);
-  $('repIncome').textContent = fmt(totInc, dashCurrency);
-  $('repExpense').textContent = fmt(totExp, dashCurrency);
-  $('repNet').textContent = fmt(totInc - totExp, dashCurrency);
+  $('repIncome').textContent = fmt(totInc, scopeCur());
+  $('repExpense').textContent = fmt(totExp, scopeCur());
+  $('repNet').textContent = fmt(totInc - totExp, scopeCur());
   $('repRate').textContent = totInc > 0 ? Math.round((totInc - totExp) / totInc * 100) + '%' : '—';
 
   // 12-month chart
@@ -541,7 +563,7 @@ function renderReport() {
 
   // top categories of the year
   const byCat = {};
-  for (const t of txs) if (t.type === 'expense') byCat[t.category] = (byCat[t.category] || 0) + t.amount;
+  for (const t of txs) if (t.type === 'expense') byCat[t.category] = (byCat[t.category] || 0) + scopeAmt(t);
   const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 6);
   const box = $('repTopCats');
   box.innerHTML = cats.length ? '' : '<div class="empty">No expenses this year yet ✎</div>';
@@ -552,7 +574,7 @@ function renderReport() {
     row.innerHTML = `
       <span class="rep-cat-name"><i class="dot" style="background:${catColor('expense', name)}"></i>${esc(name)}</span>
       <div class="wbr-track"><div class="wbr-fill" style="width:${Math.max(2, amt / catMax * 100)}%;background:${catColor('expense', name)}"></div></div>
-      <span class="rep-cat-amt">${fmt(amt, dashCurrency)}<em>${totExp ? Math.round(amt / totExp * 100) + '%' : ''}</em></span>`;
+      <span class="rep-cat-amt">${fmt(amt, scopeCur())}<em>${totExp ? Math.round(amt / totExp * 100) + '%' : ''}</em></span>`;
     box.appendChild(row);
   }
 
@@ -573,12 +595,12 @@ function renderReport() {
     const dim = (!d.inc && !d.exp) ? ' rep-dim' : '';
     rows += `<tr${cur ? cur : dim ? ` class="${dim.trim()}"` : ''}>
       <td>${mName(d.m)}</td>
-      <td class="num inc">${d.inc ? fmt(d.inc, dashCurrency) : '·'}</td>
-      <td class="num exp">${d.exp ? fmt(d.exp, dashCurrency) : '·'}</td>
-      <td class="num ${net < 0 ? 'exp' : 'inc'}">${(d.inc || d.exp) ? fmt(net, dashCurrency) : '·'}</td>
+      <td class="num inc">${d.inc ? fmt(d.inc, scopeCur()) : '·'}</td>
+      <td class="num exp">${d.exp ? fmt(d.exp, scopeCur()) : '·'}</td>
+      <td class="num ${net < 0 ? 'exp' : 'inc'}">${(d.inc || d.exp) ? fmt(net, scopeCur()) : '·'}</td>
     </tr>`;
   }
-  rows += `<tr class="rep-total"><td>Total</td><td class="num inc">${fmt(totInc, dashCurrency)}</td><td class="num exp">${fmt(totExp, dashCurrency)}</td><td class="num ${totInc - totExp < 0 ? 'exp' : 'inc'}">${fmt(totInc - totExp, dashCurrency)}</td></tr>`;
+  rows += `<tr class="rep-total"><td>Total</td><td class="num inc">${fmt(totInc, scopeCur())}</td><td class="num exp">${fmt(totExp, scopeCur())}</td><td class="num ${totInc - totExp < 0 ? 'exp' : 'inc'}">${fmt(totInc - totExp, scopeCur())}</td></tr>`;
   $('repTable').innerHTML = rows;
 }
 
@@ -621,8 +643,8 @@ function renderBudgets() {
   list.innerHTML = '';
   const spent = {};
   for (const t of txInMonth(month))
-    if (t.type === 'expense' && walletCur(t.wallet) === DB.settings.primaryCurrency)
-      spent[t.category] = (spent[t.category] || 0) + t.amount;
+    if (t.type === 'expense')
+      spent[t.category] = (spent[t.category] || 0) + primaryAmt(t); // all wallets, converted to ₭
 
   for (const c of DB.settings.categories.expense) {
     const budget = Number(DB.budgets[c.name] || 0);
