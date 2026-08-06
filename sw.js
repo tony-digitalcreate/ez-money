@@ -1,5 +1,5 @@
 // EZ Money Manager service worker — offline app shell.
-const CACHE = 'ezmoney-v7';
+const CACHE = 'ezmoney-v8';
 const SHELL = [
   './',
   './index.html',

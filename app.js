@@ -263,7 +263,7 @@ function renderDashboard() {
   renderDonut(txs);
   renderWeekday(txs);
   renderTrend();
-  renderRows($('recentList'), [...DB.transactions].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)).slice(0, 8));
+  renderRows($('recentList'), [...DB.transactions].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)).slice(0, 30), { band: true });
 }
 
 function renderWalletOverview() {
@@ -482,15 +482,22 @@ function kipHint(amount, cur) {
   return ` <em class="lr-kip">(${fmt(v, primary)})</em>`;
 }
 
-function renderRows(container, txs) {
+function renderRows(container, txs, opts = {}) {
   container.innerHTML = '';
   if (!txs.length) {
     container.innerHTML = '<div class="empty">Nothing written on this page yet ✎</div>';
     return;
   }
+  // opts.band: tint each calendar day a different pastel (rows arrive date-sorted)
+  let bandIdx = -1, bandDate = null;
   for (const t of txs) {
     const row = document.createElement('div');
     row.className = 'ledger-row';
+    if (opts.band) {
+      if (t.date !== bandDate) { bandDate = t.date; bandIdx++; }
+      row.classList.add('banded');
+      row.dataset.band = bandIdx % 6;
+    }
     const day = t.date.slice(8, 10) + ' ' + new Date(t.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short' });
     let catLabel, catCls = '', dotColor, note = t.note || '', walletChip, amountHtml;
     if (t.type === 'transfer') {

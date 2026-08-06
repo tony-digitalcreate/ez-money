@@ -254,6 +254,20 @@ input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: v
   line-height: 1.3;
 }
 .ledger-row:hover { background: #f7fafd; }
+
+/* date banding — each calendar day gets its own pastel page tint */
+.ledger-row.banded { background: var(--band); }
+.ledger-row.banded:hover { background: var(--band-hover); }
+.ledger-row.banded[data-band="0"] { --band: #fff6e9; --band-hover: #ffeed6; }
+.ledger-row.banded[data-band="1"] { --band: #ecf6f1; --band-hover: #ddefe6; }
+.ledger-row.banded[data-band="2"] { --band: #eef3fd; --band-hover: #e0eafb; }
+.ledger-row.banded[data-band="3"] { --band: #fdeef1; --band-hover: #fbe0e6; }
+.ledger-row.banded[data-band="4"] { --band: #f4effb; --band-hover: #eae1f7; }
+.ledger-row.banded[data-band="5"] { --band: #f6f8e9; --band-hover: #eef2d8; }
+/* run the tint to the card edges instead of floating inside its padding */
+.recent-card { overflow: hidden; }
+.recent-card .ledger-lines { margin: 0 -1.3rem -1.1rem; }
+.recent-card .ledger-row:last-child { border-bottom: none; }
 .lr-date { width: 52px; flex: none; font-size: .78rem; color: var(--ink-faint); font-weight: 600; text-align: right; }
 .lr-cat {
   flex: none; display: inline-flex; align-items: center; gap: .45rem;
